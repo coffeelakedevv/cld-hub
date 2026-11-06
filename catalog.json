@@ -1,6 +1,6 @@
 {
   "catalog_version": "2.1",
-  "last_updated": "2026-10-17T08:54:59+00:00",
+  "last_updated": "2026-11-06T15:40:33+00:00",
   "catalog_url": "https://raw.githubusercontent.com/coffeelakedevv/cld-hub/main/catalog.json",
   "stats_url": "https://coffeelakedevv.github.io/cld-hub/stats.json",
   "apps": [
@@ -21,11 +21,11 @@
       "downloads": {
         "windows": {
           "url": "https://github.com/coffeelakedevv/cld-password-generator/releases/download/v1.2.5/CLDPasswordGenerator-Windows64bit.rar",
-          "size_mb": 2.0
+          "size_mb": 2
         }
       },
       "download_url": "https://github.com/coffeelakedevv/cld-password-generator/releases/download/v1.2.5/CLDPasswordGenerator-Windows64bit.rar",
-      "size_mb": 2.0
+      "size_mb": 2
     },
     {
       "id": "CLD-MD-31122025",
@@ -44,11 +44,12 @@
       "downloads": {
         "windows": {
           "url": "https://github.com/coffeelakedevv/cld-media-downloader/releases/download/v1.0.1-beta/CLDMediaDownloader-Windows64bit.exe",
-          "size_mb": 155.0
+          "size_mb": 155
         }
       },
       "download_url": "https://github.com/coffeelakedevv/cld-media-downloader/releases/download/v1.0.1-beta/CLDMediaDownloader-Windows64bit.exe",
-      "size_mb": 155.0
+      "size_mb": 155,
+      "logo": "https://raw.githubusercontent.com/coffeelakedevv/cld-hub/main/logos/CLD-MD-31122025-32f2e98d.png"
     },
     {
       "id": "CLD-ZPV-24082022",
