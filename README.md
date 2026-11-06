@@ -6,8 +6,8 @@ repodaki kataloğu okuyarak uygulamaları listeler ve günceller.
 | | |
 |---|---|
 | Katalog | [`catalog.json`](catalog.json) |
-| İndirme istatistikleri | https://coffeelakedevv.github.io/cld-hub-store/stats.json |
-| CLD Hub'ı indir | [Releases](https://github.com/coffeelakedevv/cld-hub-store/releases/latest) |
+| İndirme istatistikleri | https://coffeelakedevv.github.io/cld-hub/stats.json |
+| CLD Hub'ı indir | [Releases](https://github.com/coffeelakedevv/cld-hub/releases/latest) |
 
 ---
 

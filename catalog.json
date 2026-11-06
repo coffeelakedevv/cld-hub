@@ -1,8 +1,8 @@
 {
   "catalog_version": "2.1",
   "last_updated": "2026-10-17T08:54:59+00:00",
-  "catalog_url": "https://raw.githubusercontent.com/coffeelakedevv/cld-hub-store/main/catalog.json",
-  "stats_url": "https://coffeelakedevv.github.io/cld-hub-store/stats.json",
+  "catalog_url": "https://raw.githubusercontent.com/coffeelakedevv/cld-hub/main/catalog.json",
+  "stats_url": "https://coffeelakedevv.github.io/cld-hub/stats.json",
   "apps": [
     {
       "id": "CLD-PG-07012026",

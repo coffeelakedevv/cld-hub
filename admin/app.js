@@ -89,6 +89,7 @@ function rowState(app) {
 function savedConnection() {
   try {
     const conn = JSON.parse(localStorage.getItem(CONN_KEY) || "null");
+    if (conn && conn.repo === "cld-hub-store") conn.repo = "cld-hub";   // repo yeniden adlandırıldı
     const token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
     return conn ? { ...conn, token, remember: Boolean(localStorage.getItem(TOKEN_KEY)) } : null;
   } catch {
