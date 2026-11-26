@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.first_try.outputs.page_url || steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Siteyi hazırla
@@ -40,9 +40,17 @@ jobs:
           mkdir -p _site
           cp -r admin/. _site/
           python tools/stats.py catalog.json _site/stats.json
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
+      # GitHub ara sıra yeni yüklenen paketi hemen göremiyor ("No artifacts named
+      # github-pages"); böyle olursa biraz bekleyip bir kez daha dener.
+      - id: first_try
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - if: steps.first_try.outcome == 'failure'
+        run: sleep 30
       - id: deployment
-        uses: actions/deploy-pages@v4
+        if: steps.first_try.outcome == 'failure'
+        uses: actions/deploy-pages@v5
