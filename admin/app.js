@@ -1,7 +1,8 @@
 import { GitHubClient, GitHubError } from "./github.js";
 import {
-  CATEGORIES, ICONS, KINDS, PLATFORMS, STATUSES,
-  emptyApp, fingerprint, guessKind, guessPlatform, parseCatalog, serializeCatalog, validateApp,
+  CATEGORIES, DEFAULT_LANGUAGES, EDITOR_LANGUAGES, ICONS, KINDS, PLATFORMS, STATUSES,
+  archivePreviousRelease, emptyApp, fingerprint, guessKind, guessPlatform, parseCatalog, resolveMedia,
+  serializeCatalog, validateApp,
 } from "./catalog.js";
 
 const CONN_KEY = "cldhub_admin_connection";
@@ -130,7 +131,8 @@ async function connect(conn) {
       state.catalog = parseCatalog(file.text);
       state.sha = file.sha;
     } else {
-      state.catalog = { catalog_url: defaultCatalogUrl(conn), apps: [] };
+      state.catalog = { catalog_url: defaultCatalogUrl(conn), languages: [...DEFAULT_LANGUAGES],
+                        media_base: "", extra: {}, apps: [] };
       state.sha = null;
       toast(`${conn.path} bulunamadı; ilk yayında oluşturulacak.`);
     }
@@ -249,7 +251,7 @@ function renderRow(app) {
   const platforms = PLATFORMS.filter((p) => app.platforms.includes(p.key));
   return h("article", { class: `app-row${marker ? " changed" : ""}` },
     h("div", { class: "app-icon" },
-      app.logo ? h("img", { src: app.logo, alt: "", loading: "lazy" }) : icon(ICONS[app.icon] || ICONS.default)),
+      app.logo ? h("img", { src: mediaUrl(app.logo), alt: "", loading: "lazy" }) : icon(ICONS[app.icon] || ICONS.default)),
     h("div", { class: "app-main" },
       h("div", { class: "app-title" },
         h("span", {}, app.name || app.id),
@@ -314,6 +316,17 @@ function select(name, options, value) {
     ...Object.entries(options).map(([k, v]) => h("option", { value: k, selected: k === value }, v)));
 }
 
+// ── Görseller ────────────────────────────────────────────────
+
+/** Katalogdaki görsel yolunu (media/…) tarayıcıda gösterilebilir adrese çevirir. */
+function mediaUrl(path) {
+  const client = state.mode === "github" ? state.client : null;
+  return resolveMedia(path, {
+    base: state.catalog?.media_base,
+    ...(client ? { owner: client.owner, repo: client.repo, branch: client.branch } : {}),
+  });
+}
+
 // ── Logo ─────────────────────────────────────────────────────
 
 const LOGO_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
@@ -322,9 +335,10 @@ const LOGO_MAX_BYTES = 1024 * 1024;
 function buildLogoField(draft) {
   const preview = h("div", { class: "logo-preview" });
   const status = h("small", { class: "muted" },
-    "Kare bir PNG, JPG veya WebP (en az 256×256, en fazla 1 MB). Yüklenen dosya store reposundaki logos/ klasörüne kaydedilir.");
+    "Kare bir PNG, JPG veya WebP (en az 256×256, en fazla 1 MB). Yüklenen dosya store reposunda media/<ID>/ klasörüne kaydedilir.");
   const urlInput = h("input", {
-    type: "url", name: "logo", value: draft.logo || "", placeholder: "https://… (yükleyince kendiliğinden dolar)",
+    type: "text", name: "logo", value: draft.logo || "", spellcheck: "false",
+    placeholder: "media/<ID>/logo.png ya da https://… (yükleyince kendiliğinden dolar)",
     oninput: () => showLogoPreview(preview, urlInput.value.trim()),
   });
   const fileInput = h("input", {
@@ -344,7 +358,7 @@ function buildLogoField(draft) {
 
 function showLogoPreview(preview, url) {
   preview.replaceChildren(url
-    ? h("img", { src: url, alt: "Logo önizlemesi", onerror: (e) => e.target.replaceWith(icon("broken_image")) })
+    ? h("img", { src: mediaUrl(url), alt: "Logo önizlemesi", onerror: (e) => e.target.replaceWith(icon("broken_image")) })
     : icon("image"));
 }
 
@@ -370,9 +384,10 @@ async function uploadLogo(fileInput, urlInput, preview, status) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const hash = [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    const url = await state.client.uploadFile(`logos/${id}-${hash}.${ext}`, bytes, `logo: ${id}`);
-    urlInput.value = url;
-    showLogoPreview(preview, url);
+    const path = `media/${id}/logo-${hash}.${ext}`;
+    await state.client.uploadFile(path, bytes, `media: ${id} logo`);
+    urlInput.value = path;
+    showLogoPreview(preview, path);
     status.textContent = "Yüklendi. Kaydedip yayınlayınca uygulamalarda görünür (önizleme birkaç dakika gecikebilir).";
   } catch (err) {
     status.className = "field-error";
@@ -449,22 +464,29 @@ function buildEditor(draft, isExisting) {
     h("p", { class: "muted small" }, "Logo yoksa ya da yüklenemezse gösterilecek simge:"),
     iconGrid,
 
+    h("div", { class: "section-title" }, icon("short_text"), "Kısa tanıtım"),
+    h("div", { class: "grid-2" },
+      ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
+        h("input", { name: `subtitle_${lang}`, value: draft.subtitle?.[lang] || "", maxlength: "80",
+                     placeholder: lang === "tr" ? "Tek cümlelik tanıtım (kartlarda görünür)" : "One-line pitch" }),
+        `subtitle_${lang}`))),
+
     h("div", { class: "section-title" }, icon("description"), "Açıklamalar"),
-    field("Türkçe", h("textarea", { name: "description_tr" }, draft.description_tr || ""), "description_tr"),
-    field("İngilizce", h("textarea", { name: "description_en" }, draft.description_en || ""), "description_en"),
+    ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
+      h("textarea", { name: `description_${lang}` }, draft.description?.[lang] || ""), `description_${lang}`)),
 
     h("div", { class: "section-title" }, icon("new_releases"), "Yenilikler (bu sürüm)"),
     h("div", { class: "grid-2" },
-      field("Türkçe", h("textarea", { name: "changelog_tr", placeholder: "- Yeni özellik…" },
-        draft.changelog?.tr || ""), "changelog_tr"),
-      field("İngilizce", h("textarea", { name: "changelog_en", placeholder: "- New feature…" },
-        draft.changelog?.en || ""), "changelog_en")),
+      ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
+        h("textarea", { name: `changelog_${lang}`, placeholder: lang === "tr" ? "- Yeni özellik…" : "- New feature…" },
+          draft.changelog?.[lang] || ""), `changelog_${lang}`))),
+    h("p", { class: "muted small" }, "Sürüm numarasını değiştirip kaydedince önceki sürüm notlarıyla birlikte sürüm geçmişine taşınır."),
 
     h("div", { class: "section-title" }, icon("photo_library"), "Ekran görüntüleri"),
     field("Görsel adresleri", h("textarea", {
-      name: "screenshots", placeholder: "Her satıra bir adres (https://…png)",
+      name: "screenshots", placeholder: "Her satıra bir adres (https://…png) ya da media/<ID>/… yolu",
     }, (draft.screenshots || []).join("\n")), "screenshots",
-    "Örn. uygulamanın reposuna yüklediğin görsellerin raw.githubusercontent.com adresleri."),
+    "Tüm dillerde gösterilir. Dile özel ekran görüntüleri Faz 3'teki dil sekmeleriyle eklenecek."),
 
     h("div", { class: "section-title" }, icon("download"), h("span", { class: "grow" }, "Kaynak ve indirmeler")),
     h("div", { class: "input-with-button" },
@@ -491,9 +513,10 @@ function readEditor(form, draft) {
     featured: form.elements.featured.checked,
     hidden: form.elements.hidden.checked,
     logo: value("logo"),
-    description_tr: value("description_tr"),
-    description_en: value("description_en"),
-    changelog: { tr: value("changelog_tr"), en: value("changelog_en") },
+    // Panelde alanı olmayan dillerin çevirileri korunur.
+    subtitle: { ...draft.subtitle, ...langValues(value, "subtitle") },
+    description: { ...draft.description, ...langValues(value, "description") },
+    changelog: { ...draft.changelog, ...langValues(value, "changelog") },
     screenshots: value("screenshots").split(/\s*\n\s*/).filter(Boolean),
     github_repo: value("github_repo"),
     platforms: [],
@@ -511,6 +534,10 @@ function readEditor(form, draft) {
     }
   }
   return app;
+}
+
+function langValues(value, prefix) {
+  return Object.fromEntries(EDITOR_LANGUAGES.map(([lang]) => [lang, value(`${prefix}_${lang}`)]));
 }
 
 function showErrors(form, errors) {
@@ -535,6 +562,7 @@ function saveEditor(event) {
 
   if (app.featured) for (const other of state.catalog.apps) other.featured = false;
   const index = state.catalog.apps.findIndex((a) => a.id === originalId);
+  if (index >= 0) archivePreviousRelease(state.catalog.apps[index], app);
   if (index >= 0) state.catalog.apps[index] = app;
   else state.catalog.apps.unshift(app);
   state.editing = null;
