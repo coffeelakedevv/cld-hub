@@ -5,7 +5,8 @@ repodaki kataloğu okuyarak uygulamaları listeler ve günceller.
 
 | | |
 |---|---|
-| Katalog | [`catalog.json`](catalog.json) |
+| Katalog | [`catalog.json`](catalog.json) (biçimi: [`schema/catalog.v3.schema.json`](schema/catalog.v3.schema.json)) |
+| Uygulama görselleri | [`media/`](media) |
 | İndirme istatistikleri | https://coffeelakedevv.github.io/cld-hub/stats.json |
 | CLD Hub'ı indir | [Releases](https://github.com/coffeelakedevv/cld-hub/releases/latest) |
 
