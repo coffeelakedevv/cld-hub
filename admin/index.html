@@ -1,159 +1,218 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#151312">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; connect-src https://api.github.com; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; script-src 'self'; base-uri 'none'; form-action 'none'">
+        content="default-src 'self'; connect-src https://api.github.com; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; script-src 'self'; base-uri 'none'; form-action 'none'">
   <title>CLD Hub Admin</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..24,400,0..1,0">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..24,400,0..1,0&display=block">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo">C</span>
-      <span class="brand-name">CLD Hub <span class="muted">Admin</span></span>
+      <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><linearGradient id="brand-gradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FBBF24"/><stop offset="1" stop-color="#EA8C0A"/></linearGradient></defs>
+        <rect width="100" height="100" rx="22" fill="url(#brand-gradient)"/>
+        <path d="M69 31a28 28 0 1 0 0 38" fill="none" stroke="#1A1205" stroke-width="10.5" stroke-linecap="round"/>
+        <circle cx="50" cy="50" r="7.3" fill="#1A1205"/><circle cx="75.5" cy="50" r="4.2" fill="#1A1205"/>
+      </svg>
+      <span class="brand-name">CLD Hub <span class="brand-tag">Admin</span></span>
     </div>
-    <div class="topbar-info" id="source-label" hidden></div>
+    <div class="source" id="source-label" hidden></div>
+    <div class="spacer"></div>
+    <span class="dirty" id="dirty-pill" hidden><i></i><span id="dirty-text"></span></span>
+    <div class="seg" id="seg-lang" role="group" aria-label="Language">
+      <button type="button" data-v="en">EN</button><button type="button" data-v="tr">TR</button>
+    </div>
+    <div class="seg hide-sm" id="seg-theme" role="group">
+      <button type="button" data-v="light" data-i18n-title="theme.light"><span class="icon">light_mode</span></button>
+      <button type="button" data-v="system" data-i18n-title="theme.system"><span class="icon">contrast</span></button>
+      <button type="button" data-v="dark" data-i18n-title="theme.dark"><span class="icon">dark_mode</span></button>
+    </div>
     <div class="topbar-actions" id="topbar-actions" hidden>
-      <span class="dirty-pill" id="dirty-pill" hidden></span>
-      <button class="btn btn-ghost" id="btn-reload" type="button" title="Kataloğu yeniden yükle">
-        <span class="icon">refresh</span><span class="label">Yenile</span>
+      <button class="btn btn-primary" id="btn-publish" type="button" disabled>
+        <span class="icon">rocket_launch</span><span class="hide-sm" data-i18n="top.publish">Publish</span>
+        <span class="count-badge" id="publish-count" hidden></span>
       </button>
-      <button class="btn btn-ghost" id="btn-export" type="button" title="JSON olarak indir">
-        <span class="icon">download</span><span class="label">İndir</span>
-      </button>
-      <button class="btn btn-primary" id="btn-publish" type="button">
-        <span class="icon">publish</span><span class="label" id="publish-label">Yayınla</span>
-      </button>
-      <button class="btn btn-icon" id="btn-disconnect" type="button" title="Bağlantıyı kes">
-        <span class="icon">logout</span>
-      </button>
+      <div class="menu-wrap">
+        <button class="btn btn-icon" id="btn-menu" type="button" aria-haspopup="menu" aria-expanded="false" data-i18n-title="top.menu">
+          <span class="icon">more_vert</span>
+        </button>
+        <div class="menu" id="menu" role="menu" hidden>
+          <button type="button" role="menuitem" id="menu-languages"><span class="icon">translate</span><span data-i18n="menu.languages">Catalog languages</span></button>
+          <button type="button" role="menuitem" id="menu-reload"><span class="icon">refresh</span><span data-i18n="menu.reload">Reload catalog</span></button>
+          <button type="button" role="menuitem" id="menu-export"><span class="icon">download</span><span data-i18n="menu.export">Download catalog.json</span></button>
+          <hr>
+          <button type="button" role="menuitem" id="menu-disconnect" class="danger-text"><span class="icon">logout</span><span data-i18n="menu.disconnect">Disconnect</span></button>
+        </div>
+      </div>
     </div>
   </header>
 
   <!-- Bağlantı ekranı -->
   <main id="view-connect" class="connect">
-    <section class="card connect-card">
-      <h1>Kataloğa bağlan</h1>
-      <p class="muted">Panel, <code>catalog.json</code> dosyasını doğrudan GitHub reposunda okur ve her yayın bir commit olarak kaydedilir.</p>
+    <section class="connect-card">
+      <svg class="connect-logo" viewBox="0 0 100 100" aria-hidden="true">
+        <rect width="100" height="100" rx="22" fill="url(#brand-gradient)"/>
+        <path d="M69 31a28 28 0 1 0 0 38" fill="none" stroke="#1A1205" stroke-width="10.5" stroke-linecap="round"/>
+        <circle cx="50" cy="50" r="7.3" fill="#1A1205"/><circle cx="75.5" cy="50" r="4.2" fill="#1A1205"/>
+      </svg>
+      <h1 data-i18n="connect.title">Connect to the catalog</h1>
+      <p class="muted" data-i18n="connect.text">The panel reads catalog.json straight from the GitHub repository, and every publish is saved as a commit.</p>
 
       <form id="connect-form" novalidate>
         <div class="grid-2">
-          <label class="field">
-            <span>Kullanıcı / organizasyon</span>
-            <input name="owner" required autocomplete="off" value="coffeelakedevv">
-          </label>
-          <label class="field">
-            <span>Repo</span>
-            <input name="repo" required autocomplete="off" value="cld-hub">
-          </label>
-          <label class="field">
-            <span>Dal (branch)</span>
-            <input name="branch" required autocomplete="off" value="main">
-          </label>
-          <label class="field">
-            <span>Dosya yolu</span>
-            <input name="path" required autocomplete="off" value="catalog.json">
-          </label>
+          <label class="field"><span class="field-label" data-i18n="connect.owner">User / organization</span>
+            <input name="owner" required autocomplete="off" value="coffeelakedevv"></label>
+          <label class="field"><span class="field-label" data-i18n="connect.repo">Repository</span>
+            <input name="repo" required autocomplete="off" value="cld-hub"></label>
+          <label class="field"><span class="field-label" data-i18n="connect.branch">Branch</span>
+            <input name="branch" required autocomplete="off" value="main"></label>
+          <label class="field"><span class="field-label" data-i18n="connect.path">File path</span>
+            <input name="path" required autocomplete="off" value="catalog.json"></label>
         </div>
         <label class="field">
-          <span>GitHub token</span>
-          <div class="input-with-button">
-            <input name="token" type="password" required autocomplete="off" spellcheck="false"
-                   placeholder="github_pat_…">
-            <button class="btn btn-icon" type="button" id="toggle-token" title="Göster / gizle">
-              <span class="icon">visibility</span>
-            </button>
-          </div>
-          <small class="muted">
-            Yalnızca bu repo için <b>Contents: Read and write</b> izni olan bir
-            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a>
-            oluştur. Token hiçbir sunucuya gönderilmez; sadece bu tarayıcıdan GitHub'a iletilir.
+          <span class="field-label" data-i18n="connect.token">GitHub token</span>
+          <span class="input-with-button">
+            <input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="github_pat_…">
+            <button class="btn btn-icon" type="button" id="toggle-token" data-i18n-title="connect.toggle"><span class="icon">visibility</span></button>
+          </span>
+          <small class="hint">
+            <span data-i18n="connect.token_hint_1">Create a</span>
+            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener" data-i18n="connect.token_link">fine-grained token</a>
+            <span data-i18n="connect.token_hint_2">with Contents: Read and write for this repository only. The token is never sent to any server; it goes only from this browser to GitHub.</span>
           </small>
         </label>
         <label class="check">
-          <input type="checkbox" name="remember">
-          <span>Bu cihazda hatırla <span class="muted">(kapalıysa sekme kapanınca silinir)</span></span>
+          <input type="checkbox" name="remember" class="switch">
+          <span><span data-i18n="connect.remember">Remember on this device</span> <span class="muted" data-i18n="connect.remember_hint">(otherwise forgotten when the tab closes)</span></span>
         </label>
         <p class="form-error" id="connect-error" role="alert"></p>
         <button class="btn btn-primary btn-wide" type="submit" id="btn-connect">
-          <span class="icon">link</span><span>Bağlan</span>
+          <span class="icon">link</span><span data-i18n="connect.submit">Connect</span>
         </button>
       </form>
 
-      <div class="divider"><span>veya</span></div>
+      <div class="divider"><span data-i18n="connect.or">or</span></div>
       <label class="btn btn-ghost btn-wide file-btn">
-        <span class="icon">folder_open</span><span>Yerel catalog.json aç</span>
+        <span class="icon">folder_open</span><span data-i18n="connect.local">Open a local catalog.json</span>
         <input type="file" id="local-file" accept="application/json,.json">
       </label>
-      <small class="muted center">Yerel modda değişiklikler GitHub'a gönderilmez; düzenledikten sonra dosyayı indirirsin.</small>
+      <small class="hint center" data-i18n="connect.local_hint">In local mode nothing is sent to GitHub; download the file when you are done.</small>
     </section>
   </main>
 
   <!-- Katalog ekranı -->
   <main id="view-catalog" class="catalog" hidden>
+    <div class="page-head">
+      <h1 data-i18n="list.title">Apps</h1>
+      <p class="muted num" id="app-count"></p>
+    </div>
     <div class="toolbar">
-      <div class="search">
-        <span class="icon">search</span>
-        <input id="search" type="search" placeholder="Ad veya ID ile ara" autocomplete="off">
-      </div>
-      <div class="chips" id="filters"></div>
+      <label class="search">
+        <span class="icon muted">search</span>
+        <input id="search" type="search" autocomplete="off" data-i18n-placeholder="list.search">
+        <span class="kbd hide-sm">/</span>
+      </label>
       <button class="btn btn-primary" id="btn-add" type="button">
-        <span class="icon">add</span><span>Yeni ekle</span>
+        <span class="icon">add</span><span data-i18n="list.add">New app</span><span class="kbd on-accent hide-sm">N</span>
       </button>
     </div>
-    <div id="app-list" class="app-list"></div>
+    <div class="chips filters" id="filters"></div>
+    <div id="app-grid" class="grid"></div>
   </main>
 
   <!-- Düzenleyici -->
-  <dialog id="editor" class="sheet">
-    <form id="editor-form" method="dialog" novalidate>
-      <header class="sheet-header">
-        <h2 id="editor-title">Yeni uygulama</h2>
-        <button class="btn btn-icon" type="button" data-close title="Kapat"><span class="icon">close</span></button>
+  <dialog id="editor" class="sheet" aria-labelledby="editor-title">
+    <div class="sheet-panel">
+      <header class="sheet-head">
+        <div id="editor-logo"></div>
+        <div class="sheet-title">
+          <h2 id="editor-title"></h2>
+          <div class="sheet-sub" id="editor-sub"></div>
+        </div>
+        <button class="btn btn-icon" type="button" data-close data-i18n-title="common.close"><span class="icon">close</span></button>
       </header>
+      <nav class="tabs" id="editor-tabs" role="tablist">
+        <button class="tab" type="button" role="tab" data-tab="general"><span class="icon">tune</span><span class="tab-label" data-i18n="editor.tab.general">General</span></button>
+        <button class="tab" type="button" role="tab" data-tab="texts"><span class="icon">translate</span><span class="tab-label" data-i18n="editor.tab.texts">Texts</span></button>
+        <button class="tab" type="button" role="tab" data-tab="media"><span class="icon">photo_library</span><span class="tab-label" data-i18n="editor.tab.media">Media</span></button>
+        <button class="tab" type="button" role="tab" data-tab="release"><span class="icon">new_releases</span><span class="tab-label" data-i18n="editor.tab.release">Release</span></button>
+        <button class="tab" type="button" role="tab" data-tab="preview"><span class="icon">visibility</span><span class="tab-label" data-i18n="editor.tab.preview">Preview</span></button>
+      </nav>
       <div class="sheet-body" id="editor-body"></div>
-      <footer class="sheet-footer">
+      <footer class="sheet-foot">
         <p class="form-error" id="editor-error" role="alert"></p>
-        <button class="btn btn-ghost" type="button" data-close>Vazgeç</button>
-        <button class="btn btn-primary" type="submit"><span class="icon">check</span><span>Kaydet</span></button>
+        <span class="hide-sm shortcut"><span class="kbd">Ctrl</span><span class="kbd">S</span></span>
+        <button class="btn btn-ghost" type="button" data-close data-i18n="common.cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" id="btn-save"><span class="icon">check</span><span data-i18n="editor.save">Save</span></button>
       </footer>
-    </form>
+    </div>
   </dialog>
 
   <!-- Yayınlama -->
-  <dialog id="publish" class="modal">
-    <form id="publish-form" method="dialog">
-      <h2>Değişiklikleri yayınla</h2>
+  <dialog id="publish" class="modal wide" aria-labelledby="publish-title">
+    <form id="publish-form" class="publish-form">
+      <h2 id="publish-title" data-i18n="publish.title">Publish changes</h2>
+      <p class="muted" data-i18n="publish.subtitle">Images and catalog.json go out together in a single commit.</p>
       <ul class="change-list" id="change-list"></ul>
+      <div class="media-summary" id="media-summary" hidden></div>
       <label class="field">
-        <span>Commit mesajı</span>
-        <input name="message" id="commit-message" required>
+        <span class="field-label" data-i18n="publish.commit">Commit message</span>
+        <input name="message" id="commit-message" class="mono" required>
       </label>
+      <progress id="publish-progress" class="progress" value="0" max="1" hidden></progress>
       <p class="form-error" id="publish-error" role="alert"></p>
       <div class="modal-actions">
-        <button class="btn btn-ghost" type="button" data-close>Vazgeç</button>
+        <button class="btn btn-ghost" type="button" data-close data-i18n="common.cancel">Cancel</button>
         <button class="btn btn-primary" type="submit" id="btn-publish-confirm">
-          <span class="icon">publish</span><span>Yayınla</span>
+          <span class="icon">rocket_launch</span><span data-i18n="publish.ok">Publish</span>
         </button>
       </div>
     </form>
+    <div class="publish-done">
+      <svg class="check-anim" viewBox="0 0 80 80" aria-hidden="true"><circle cx="40" cy="40" r="34"/><path d="M26 41l10 10 19-20"/></svg>
+      <h2 data-i18n="publish.done_title">Published</h2>
+      <p class="muted" data-i18n="publish.done_text">CLD Hub users will see the changes within a few minutes.</p>
+      <div class="modal-actions center">
+        <a class="btn btn-ghost" id="commit-link" target="_blank" rel="noopener"><span class="icon">open_in_new</span><span data-i18n="publish.view_commit">View commit</span></a>
+        <button class="btn btn-primary" type="button" data-close data-i18n="common.done">Done</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Katalog dilleri -->
+  <dialog id="languages" class="modal" aria-labelledby="languages-title">
+    <h2 id="languages-title" data-i18n="languages.title">Catalog languages</h2>
+    <p class="muted" data-i18n="languages.text">App texts can be entered in these languages. The first one is the default: CLD Hub shows it when a translation is missing.</p>
+    <ul class="lang-list" id="lang-list"></ul>
+    <div class="url-add">
+      <input id="lang-input" class="mono" list="lang-suggestions" autocomplete="off" spellcheck="false" data-i18n-placeholder="languages.add_placeholder">
+      <datalist id="lang-suggestions"></datalist>
+      <button class="btn btn-ghost" type="button" id="lang-add"><span class="icon">add</span><span data-i18n="common.add">Add</span></button>
+    </div>
+    <p class="form-error" id="lang-error" role="alert"></p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" type="button" data-close data-i18n="common.done">Done</button>
+    </div>
   </dialog>
 
   <!-- Onay -->
-  <dialog id="confirm" class="modal">
-    <form method="dialog">
-      <h2 id="confirm-title"></h2>
-      <p class="muted" id="confirm-text"></p>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" value="cancel">Vazgeç</button>
-        <button class="btn btn-danger" value="ok" id="confirm-ok"></button>
-      </div>
-    </form>
+  <dialog id="confirm" class="modal small" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2>
+    <p class="muted" id="confirm-text"></p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" data-close data-i18n="common.cancel">Cancel</button>
+      <button class="btn btn-danger" type="button" id="confirm-ok"></button>
+    </div>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>

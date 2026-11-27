@@ -8,7 +8,7 @@ name: Admin panelini yayınla
 on:
   push:
     branches: [main]
-    paths: ["admin/**", "catalog.json", "media/**", "schema/**", "tools/**", ".github/workflows/pages.yml"]
+    paths: ["admin/**", "catalog.json", "media/**", "schema/**", "tools/**", "tests/**", ".github/workflows/pages.yml"]
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -37,6 +37,9 @@ jobs:
       # Bozuk katalog yayına çıkmasın: hata varsa iş burada durur.
       - name: Kataloğu doğrula
         run: python tools/validate.py catalog.json
+      # Admin panelinin katalog modeli ve yayın kodu bozuksa panel yayınlanmaz.
+      - name: Admin paneli testleri
+        run: node tests/admin.test.mjs
       - name: Siteyi hazırla
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -1,126 +1,69 @@
 import { GitHubClient, GitHubError } from "./github.js";
 import {
-  CATEGORIES, DEFAULT_LANGUAGES, EDITOR_LANGUAGES, ICONS, KINDS, PLATFORMS, STATUSES,
-  archivePreviousRelease, emptyApp, fingerprint, guessKind, guessPlatform, parseCatalog, resolveMedia,
-  serializeCatalog, validateApp,
+  CATEGORIES, DEFAULT_LANGUAGES, LANG_PATTERN, PLATFORMS, STATUSES,
+  diffApp, languageUsage, missingTexts, parseCatalog, removeLanguage, serializeApp, serializeCatalog, translationStatus,
 } from "./catalog.js";
+import { initEditor, isEditorOpen, logoTile, normalizeCode, openEditor, refreshEditor, saveShortcut } from "./editor.js";
+import { applyStatic, getLang, languageName, nativeLanguageName, setLang, t } from "./locales.js";
+import {
+  changes, clearPending, defaultLang, mediaChanges, resetBaseline, rowState, state,
+} from "./state.js";
+import {
+  $, closeDialog, confirmDialog, emptyState, guardDialog, h, icon, openDialog, segmented, skeletonCards, toast,
+} from "./ui.js";
 
 const CONN_KEY = "cldhub_admin_connection";
 const TOKEN_KEY = "cldhub_admin_token";
+const THEME_KEY = "cldhub_admin_theme";
 
-const state = {
-  mode: null,            // "github" | "local"
-  client: null,
-  sha: null,
-  catalog: null,         // { catalog_url, apps: [...] }
-  baseline: new Map(),   // id → fingerprint (son yükleme/yayın anındaki hâli)
-  filter: { query: "", category: "all", status: "all" },
-  editing: null,         // { originalId, draft }
+const store = {
+  get: (area, key) => { try { return area.getItem(key); } catch { return null; } },
+  set: (area, key, value) => { try { area.setItem(key, value); } catch { /* depolama kapalı */ } },
+  remove: (area, key) => { try { area.removeItem(key); } catch { /* yok say */ } },
 };
 
-// ── DOM yardımcıları ─────────────────────────────────────────
-// İçerik daima textContent ile eklenir; katalog verisi HTML olarak yorumlanmaz.
+const errorText = (err) => (err?.code ? t(`error.${err.code}`, err.params || {}) : err?.message || String(err));
 
-const $ = (id) => document.getElementById(id);
+// ── Tema ─────────────────────────────────────────────────────
 
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(props || {})) {
-    if (value == null || value === false) continue;
-    if (key === "class") el.className = value;
-    else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
-    else if (key === "value") el.value = value;
-    else if (key === "checked") el.checked = Boolean(value);
-    else el.setAttribute(key, value === true ? "" : value);
-  }
-  for (const child of children.flat()) {
-    if (child == null || child === false) continue;
-    el.append(child instanceof Node ? child : String(child));
-  }
-  return el;
-}
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 
-const icon = (name) => h("span", { class: "icon", "aria-hidden": "true" }, name);
-
-function toast(message, type = "info", link = null) {
-  const icons = { info: "info", success: "check_circle", error: "error" };
-  const el = h("div", { class: `toast ${type}`, role: type === "error" ? "alert" : "status" },
-    icon(icons[type]), h("span", {}, message),
-    link && h("a", { href: link.href, target: "_blank", rel: "noopener" }, link.text));
-  $("toasts").append(el);
-  setTimeout(() => el.remove(), type === "error" ? 7000 : 4000);
-}
-
-function confirmDialog(title, text, okLabel) {
-  $("confirm-title").textContent = title;
-  $("confirm-text").textContent = text;
-  $("confirm-ok").textContent = okLabel;
-  const dialog = $("confirm");
-  dialog.returnValue = "";
-  dialog.showModal();
-  return new Promise((resolve) => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
-  });
-}
-
-// ── Değişiklik takibi ────────────────────────────────────────
-
-function changes() {
-  const current = new Map(state.catalog.apps.map((a) => [a.id, a]));
-  const added = [], modified = [], removed = [];
-  for (const [id, app] of current) {
-    if (!state.baseline.has(id)) added.push(app.name || id);
-    else if (state.baseline.get(id) !== fingerprint(app)) modified.push(app.name || id);
-  }
-  for (const id of state.baseline.keys()) if (!current.has(id)) removed.push(id);
-  return { added, modified, removed, count: added.length + modified.length + removed.length };
-}
-
-function resetBaseline() {
-  state.baseline = new Map(state.catalog.apps.map((a) => [a.id, fingerprint(a)]));
-}
-
-function rowState(app) {
-  if (!state.baseline.has(app.id)) return "new";
-  return state.baseline.get(app.id) !== fingerprint(app) ? "changed" : null;
+function applyTheme(choice) {
+  const dark = choice === "dark" || (choice === "system" && darkQuery.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#151312" : "#F7F6F2");
 }
 
 // ── Bağlantı ─────────────────────────────────────────────────
 
 function savedConnection() {
   try {
-    const conn = JSON.parse(localStorage.getItem(CONN_KEY) || "null");
+    const conn = JSON.parse(store.get(localStorage, CONN_KEY) || "null");
     if (conn && conn.repo === "cld-hub-store") conn.repo = "cld-hub";   // repo yeniden adlandırıldı
-    const token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
-    return conn ? { ...conn, token, remember: Boolean(localStorage.getItem(TOKEN_KEY)) } : null;
+    const token = store.get(sessionStorage, TOKEN_KEY) || store.get(localStorage, TOKEN_KEY);
+    return conn ? { ...conn, token, remember: Boolean(store.get(localStorage, TOKEN_KEY)) } : null;
   } catch {
     return null;
   }
 }
 
 function storeConnection({ owner, repo, branch, path, token, remember }) {
-  try {
-    localStorage.setItem(CONN_KEY, JSON.stringify({ owner, repo, branch, path }));
-    localStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-    (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
-  } catch {
-    /* Depolama kapalıysa bağlantı yalnızca bu oturumda yaşar. */
-  }
+  store.set(localStorage, CONN_KEY, JSON.stringify({ owner, repo, branch, path }));
+  store.remove(localStorage, TOKEN_KEY);
+  store.remove(sessionStorage, TOKEN_KEY);
+  store.set(remember ? localStorage : sessionStorage, TOKEN_KEY, token);
 }
 
 function forgetToken() {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-  } catch { /* yok say */ }
+  store.remove(localStorage, TOKEN_KEY);
+  store.remove(sessionStorage, TOKEN_KEY);
 }
 
 async function connect(conn) {
   const button = $("btn-connect");
-  const error = $("connect-error");
-  error.textContent = "";
+  $("connect-error").textContent = "";
   button.disabled = true;
+  button.classList.add("loading");
   try {
     const client = new GitHubClient(conn);
     await client.checkAccess();
@@ -131,150 +74,178 @@ async function connect(conn) {
       state.catalog = parseCatalog(file.text);
       state.sha = file.sha;
     } else {
-      state.catalog = { catalog_url: defaultCatalogUrl(conn), languages: [...DEFAULT_LANGUAGES],
-                        media_base: "", extra: {}, apps: [] };
+      state.catalog = { catalog_url: `https://raw.githubusercontent.com/${conn.owner}/${conn.repo}/${conn.branch}/${conn.path}`,
+                        languages: [...DEFAULT_LANGUAGES], media_base: "", extra: {}, apps: [] };
       state.sha = null;
-      toast(`${conn.path} bulunamadı; ilk yayında oluşturulacak.`);
+      toast(t("connect.created_on_publish", { path: conn.path }), "info");
     }
     storeConnection(conn);
+    clearPending();
     resetBaseline();
-    showCatalog(`${conn.owner}/${conn.repo} · ${conn.branch} · ${conn.path}`);
+    showCatalog();
   } catch (err) {
-    error.textContent = err.message;
+    $("connect-error").textContent = errorText(err);
     if (err instanceof GitHubError && err.status === 401) forgetToken();
   } finally {
     button.disabled = false;
+    button.classList.remove("loading");
   }
-}
-
-function defaultCatalogUrl({ owner, repo, branch, path }) {
-  return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
 }
 
 async function openLocalFile(file) {
   try {
     state.catalog = parseCatalog(await file.text());
     state.mode = "local";
-    state.client = new GitHubClient();  // token'sız; yalnızca herkese açık sürüm bilgisi için
+    state.client = new GitHubClient();   // token'sız; yalnızca herkese açık sürüm bilgisi için
     state.sha = null;
+    state.localName = file.name;
+    clearPending();
     resetBaseline();
-    showCatalog(`Yerel dosya · ${file.name}`);
+    showCatalog();
   } catch (err) {
-    $("connect-error").textContent = err.message;
+    $("connect-error").textContent = errorText(err);
   }
 }
 
 async function reload() {
-  if (changes().count && !(await confirmDialog(
-    "Değişiklikler atılsın mı?", "Yayınlanmamış değişikliklerin kaybolacak.", "Yeniden yükle"))) return;
   if (state.mode !== "github") return;
+  if (changes().count && !(await confirmDialog({ title: t("reload.title"), text: t("common.unpublished_lost"), ok: t("reload.ok") }))) return;
+  $("app-grid").replaceChildren(...skeletonCards(4));
   try {
     const file = await state.client.readCatalog();
     if (file) {
       state.catalog = parseCatalog(file.text);
       state.sha = file.sha;
     }
+    clearPending();
     resetBaseline();
-    render();
-    toast("Katalog yeniden yüklendi.", "success");
+    render(true);
+    toast(t("reload.done"));
   } catch (err) {
-    toast(err.message, "error");
+    render();
+    toast(errorText(err), "error");
   }
 }
 
 async function disconnect() {
-  if (changes().count && !(await confirmDialog(
-    "Bağlantı kesilsin mi?", "Yayınlanmamış değişikliklerin kaybolacak.", "Bağlantıyı kes"))) return;
+  if (changes().count && !(await confirmDialog({ title: t("disconnect.title"), text: t("common.unpublished_lost"), ok: t("disconnect.ok") }))) return;
   forgetToken();
+  clearPending();
   Object.assign(state, { mode: null, client: null, sha: null, catalog: null });
   $("view-catalog").hidden = true;
   $("view-connect").hidden = false;
   $("topbar-actions").hidden = true;
   $("source-label").hidden = true;
+  $("dirty-pill").hidden = true;
   $("connect-form").token.value = "";
 }
 
 // ── Katalog ekranı ───────────────────────────────────────────
 
-function showCatalog(sourceLabel) {
+function sourceLabel() {
+  if (state.mode === "github") {
+    const c = state.client;
+    return [h("span", { class: "dot" }), h("span", { class: "mono" }, `${c.owner}/${c.repo} · ${c.branch}`)];
+  }
+  return [icon("description"), h("span", { class: "mono" }, t("source.local", { name: state.localName || "catalog.json" }))];
+}
+
+function showCatalog() {
   $("view-connect").hidden = true;
   $("view-catalog").hidden = false;
   $("topbar-actions").hidden = false;
-  const label = $("source-label");
-  label.hidden = false;
-  label.replaceChildren(icon(state.mode === "github" ? "cloud" : "description"), sourceLabel);
+  $("source-label").hidden = false;
+  $("source-label").replaceChildren(...sourceLabel());
   $("btn-publish").hidden = state.mode !== "github";
-  $("btn-reload").hidden = state.mode !== "github";
+  $("menu-reload").hidden = state.mode !== "github";
   renderFilters();
-  render();
+  render(true);
 }
 
 function renderFilters() {
   const chip = (group, value, label) => h("button", {
     class: "chip", type: "button", "aria-pressed": String(state.filter[group] === value),
-    onclick: () => { state.filter[group] = value; renderFilters(); render(); },
+    onclick: () => { state.filter[group] = value; renderFilters(); render(true); },
   }, label);
   $("filters").replaceChildren(
-    chip("category", "all", "Tümü"),
-    ...Object.entries(CATEGORIES).map(([k, v]) => chip("category", k, v)),
+    chip("category", "all", t("filter.all")),
+    ...CATEGORIES.map((c) => chip("category", c, t(`category.${c}_plural`))),
     h("span", { class: "chip-sep" }),
-    chip("status", "all", "Her durum"),
-    ...Object.entries(STATUSES).map(([k, v]) => chip("status", k, v)),
+    chip("status", "all", t("filter.any_status")),
+    ...STATUSES.map((s) => chip("status", s, t(`status.${s}`))),
   );
 }
 
-function render() {
+function render(animate = false) {
+  if (!state.catalog) return;
   const { query, category, status } = state.filter;
-  const q = query.trim().toLocaleLowerCase("tr");
+  const q = query.trim().toLocaleLowerCase();
   const apps = state.catalog.apps.filter((a) =>
     (category === "all" || a.category === category) &&
     (status === "all" || a.status === status) &&
-    (!q || a.name.toLocaleLowerCase("tr").includes(q) || a.id.toLocaleLowerCase("tr").includes(q)));
+    (!q || a.name.toLocaleLowerCase().includes(q) || a.id.toLocaleLowerCase().includes(q)));
 
-  const list = $("app-list");
+  const grid = $("app-grid");
+  grid.classList.toggle("animate", animate);
   if (!apps.length) {
-    list.replaceChildren(h("div", { class: "empty" }, icon("inventory_2"),
-      state.catalog.apps.length ? "Bu filtreye uyan kayıt yok." : "Katalog boş. İlk uygulamayı ekleyerek başla."));
+    grid.replaceChildren(state.catalog.apps.length
+      ? emptyState("search_off", t("list.no_match"), t("list.no_match_text"))
+      : emptyState("inventory_2", t("list.empty"), t("list.empty_text")));
   } else {
-    list.replaceChildren(...apps.map(renderRow));
+    grid.replaceChildren(...apps.map((app, i) => renderCard(app, i)));
   }
+  const total = state.catalog.apps.length;
+  $("app-count").textContent = t("list.count", { count: total, langs: state.catalog.languages.join(", ") });
+  updateDirty();
+}
 
+function updateDirty() {
+  if (!state.catalog) return;
   const { count } = changes();
   $("dirty-pill").hidden = !count;
-  $("dirty-pill").textContent = `${count} değişiklik`;
-  $("publish-label").textContent = count ? `Yayınla (${count})` : "Yayınla";
+  $("dirty-text").textContent = t("list.unpublished", { count });
+  $("publish-count").textContent = count ? String(count) : "";
+  $("publish-count").hidden = !count;
   $("btn-publish").disabled = !count;
 }
 
-function renderRow(app) {
+function renderCard(app, index) {
   const marker = rowState(app);
+  const base = defaultLang();
   const platforms = PLATFORMS.filter((p) => app.platforms.includes(p.key));
-  return h("article", { class: `app-row${marker ? " changed" : ""}` },
-    h("div", { class: "app-icon" },
-      app.logo ? h("img", { src: mediaUrl(app.logo), alt: "", loading: "lazy" }) : icon(ICONS[app.icon] || ICONS.default)),
-    h("div", { class: "app-main" },
-      h("div", { class: "app-title" },
-        h("span", {}, app.name || app.id),
-        h("span", { class: `badge badge-${app.status}` }, STATUSES[app.status] || app.status),
-        app.hidden && h("span", { class: "badge badge-archived", title: "Mağazada listelenmez" }, "Gizli"),
-        marker && h("span", { class: "badge badge-new" }, marker === "new" ? "Yeni" : "Değişti")),
-      h("div", { class: "app-meta" },
-        h("span", {}, app.id),
-        h("span", {}, CATEGORIES[app.category] || app.category),
-        app.version && h("span", {}, `v${app.version}`),
-        app.release_date && h("span", {}, icon("event"), app.release_date),
-        platforms.length > 0 && h("span", { title: platforms.map((p) => p.label).join(", ") },
-          ...platforms.map((p) => icon(p.icon))))),
-    h("div", { class: "app-actions" },
-      h("button", {
-        class: "btn btn-icon star", type: "button", "aria-pressed": String(app.featured),
-        title: app.featured ? "Vitrinden kaldır" : "Vitrinde öne çıkar",
-        onclick: () => toggleFeatured(app),
-      }, icon("star")),
-      h("button", { class: "btn btn-icon", type: "button", title: "Düzenle", onclick: () => openEditor(app) },
-        icon("edit")),
-      h("button", { class: "btn btn-icon", type: "button", title: "Sil", onclick: () => removeApp(app) },
-        icon("delete"))));
+  const subtitle = app.subtitle[getLang()] || app.subtitle[base] || Object.values(app.subtitle)[0] || "";
+  const card = h("article", {
+    class: `card${marker ? " changed" : ""}`, tabindex: "0", role: "button",
+    "aria-label": t("list.edit", { name: app.name || app.id }),
+    style: { "--i": String(index) },
+    onclick: (e) => { if (!e.target.closest(".card-actions")) openEditor(app); },
+    onkeydown: (e) => { if (e.key === "Enter" && e.target === card) openEditor(app); },
+  },
+  marker && h("span", { class: "unsaved", title: t(marker === "new" ? "list.new" : "list.changed") }),
+  h("div", { class: "card-top" },
+    logoTile(app),
+    h("div", { class: "card-title" },
+      h("h3", {}, app.name || app.id),
+      h("div", { class: "mono muted" }, app.id))),
+  subtitle && h("p", { class: "card-sub" }, subtitle),
+  h("div", { class: "card-chips" },
+    app.featured && h("span", { class: "status star" }, icon("star"), t("list.featured")),
+    h("span", { class: `status ${app.status}` }, t(`status.${app.status}`)),
+    app.hidden && h("span", { class: "status hidden" }, icon("visibility_off"), t("list.hidden")),
+    h("span", { class: "status plain" }, t(`category.${app.category}`))),
+  h("div", { class: "card-meta" },
+    h("span", { class: "platforms", title: platforms.map((p) => p.label).join(", ") }, ...platforms.map((p) => icon(p.icon))),
+    h("span", { class: "num" }, app.version ? `v${app.version}` : "—"),
+    h("span", { class: "langs" }, ...state.catalog.languages.map((lang) => {
+      const s = translationStatus(app, lang, base);
+      return h("span", { class: `lang ${s.state}`, style: { "--p": `${s.percent}%` },
+        title: `${languageName(lang)}: ${s.percent}%` }, lang);
+    }))),
+  h("div", { class: "card-actions" },
+    h("button", { class: "btn btn-icon sm star", type: "button", "aria-pressed": String(app.featured),
+      title: t(app.featured ? "list.unfeature" : "list.feature"), onclick: () => toggleFeatured(app) }, icon("star")),
+    h("button", { class: "btn btn-icon sm", type: "button", title: t("common.delete"), onclick: () => removeApp(app) }, icon("delete"))));
+  return card;
 }
 
 function toggleFeatured(app) {
@@ -286,385 +257,161 @@ function toggleFeatured(app) {
 }
 
 async function removeApp(app) {
-  const ok = await confirmDialog(`"${app.name || app.id}" silinsin mi?`,
-    "Kayıt katalogdan kaldırılır. Yayınlayana kadar geri almak için sayfayı yeniden yükleyebilirsin.", "Sil");
+  const ok = await confirmDialog({ title: t("remove.title", { name: app.name || app.id }), text: t("remove.text"), ok: t("common.delete") });
   if (!ok) return;
   state.catalog.apps = state.catalog.apps.filter((a) => a !== app);
   render();
+  toast(t("remove.done", { name: app.name || app.id }), "info");
 }
 
-// ── Düzenleyici ──────────────────────────────────────────────
+// ── Katalog dilleri ──────────────────────────────────────────
 
-function openEditor(app = null) {
-  const draft = structuredClone(app || emptyApp());
-  state.editing = { originalId: app ? app.id : null, draft };
-  $("editor-title").textContent = app ? `Düzenle: ${app.name || app.id}` : "Yeni uygulama";
-  $("editor-error").textContent = "";
-  $("editor-body").replaceChildren(...buildEditor(draft, Boolean(app)));
-  $("editor").showModal();
+function openLanguages() {
+  renderLanguages();
+  openDialog($("languages"));
 }
 
-function field(label, control, key, hint) {
-  return h("label", { class: "field", "data-key": key },
-    h("span", {}, label), control,
-    hint && h("small", { class: "muted" }, hint),
-    h("small", { class: "field-error", "data-error": key }));
+function renderLanguages() {
+  const langs = state.catalog.languages;
+  $("lang-list").replaceChildren(...langs.map((code, index) => h("li", { class: "lang-item" },
+    h("span", { class: "lang-code mono" }, code),
+    h("div", { class: "grow" }, h("b", {}, nativeLanguageName(code)), h("div", { class: "hint" }, languageName(code))),
+    index === 0
+      ? h("span", { class: "status star" }, t("languages.default"))
+      : h("button", { type: "button", class: "btn btn-icon sm", title: t("common.remove"), onclick: () => removeCatalogLanguage(code) },
+        icon("delete")))));
+  $("lang-error").textContent = "";
 }
 
-function select(name, options, value) {
-  return h("select", { name },
-    ...Object.entries(options).map(([k, v]) => h("option", { value: k, selected: k === value }, v)));
-}
-
-// ── Görseller ────────────────────────────────────────────────
-
-/** Katalogdaki görsel yolunu (media/…) tarayıcıda gösterilebilir adrese çevirir. */
-function mediaUrl(path) {
-  const client = state.mode === "github" ? state.client : null;
-  return resolveMedia(path, {
-    base: state.catalog?.media_base,
-    ...(client ? { owner: client.owner, repo: client.repo, branch: client.branch } : {}),
-  });
-}
-
-// ── Logo ─────────────────────────────────────────────────────
-
-const LOGO_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
-const LOGO_MAX_BYTES = 1024 * 1024;
-
-function buildLogoField(draft) {
-  const preview = h("div", { class: "logo-preview" });
-  const status = h("small", { class: "muted" },
-    "Kare bir PNG, JPG veya WebP (en az 256×256, en fazla 1 MB). Yüklenen dosya store reposunda media/<ID>/ klasörüne kaydedilir.");
-  const urlInput = h("input", {
-    type: "text", name: "logo", value: draft.logo || "", spellcheck: "false",
-    placeholder: "media/<ID>/logo.png ya da https://… (yükleyince kendiliğinden dolar)",
-    oninput: () => showLogoPreview(preview, urlInput.value.trim()),
-  });
-  const fileInput = h("input", {
-    type: "file", accept: Object.keys(LOGO_TYPES).join(","),
-    onchange: () => uploadLogo(fileInput, urlInput, preview, status),
-  });
-  const uploadButton = h("label", { class: "btn btn-ghost file-btn" }, icon("upload"), "Logo yükle", fileInput);
-  uploadButton.hidden = state.mode !== "github";
-  showLogoPreview(preview, draft.logo);
-  return h("div", { class: "logo-row" },
-    preview,
-    h("div", { class: "logo-fields" },
-      h("div", { class: "input-with-button" }, field("Logo adresi", urlInput, "logo"),
-        h("div", { class: "field-aligned" }, uploadButton)),
-      status));
-}
-
-function showLogoPreview(preview, url) {
-  preview.replaceChildren(url
-    ? h("img", { src: mediaUrl(url), alt: "Logo önizlemesi", onerror: (e) => e.target.replaceWith(icon("broken_image")) })
-    : icon("image"));
-}
-
-async function uploadLogo(fileInput, urlInput, preview, status) {
-  const file = fileInput.files[0];
-  fileInput.value = "";
-  if (!file) return;
-  const form = $("editor-form");
-  const id = form.elements.id.value.trim();
-  const ext = LOGO_TYPES[file.type];
-  const error = !id || !/^[A-Za-z0-9_-]+$/.test(id) ? "Önce geçerli bir ID yaz; dosya adı ona göre verilir."
-    : !ext ? "PNG, JPG veya WebP bir görsel seç."
-    : file.size > LOGO_MAX_BYTES ? "Logo en fazla 1 MB olabilir."
-    : "";
-  if (error) {
-    status.className = "field-error";
-    status.textContent = error;
-    return;
-  }
-  status.className = "muted";
-  status.textContent = "Yükleniyor…";
-  try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-    const hash = [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    const path = `media/${id}/logo-${hash}.${ext}`;
-    await state.client.uploadFile(path, bytes, `media: ${id} logo`);
-    urlInput.value = path;
-    showLogoPreview(preview, path);
-    status.textContent = "Yüklendi. Kaydedip yayınlayınca uygulamalarda görünür (önizleme birkaç dakika gecikebilir).";
-  } catch (err) {
-    status.className = "field-error";
-    status.textContent = err.message;
-  }
-}
-
-function buildEditor(draft, isExisting) {
-  const iconGrid = h("div", { class: "icon-grid", role: "group", "aria-label": "İkon" },
-    ...Object.entries(ICONS).map(([key, name]) => h("button", {
-      class: "icon-option", type: "button", "data-icon": key, "aria-pressed": String(draft.icon === key),
-      title: key,
-      onclick: (e) => {
-        draft.icon = key;
-        for (const b of iconGrid.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
-      },
-    }, icon(name), key)));
-
-  const releaseInfo = h("p", { class: "release-info", id: "release-info" });
-  const fillButton = h("button", {
-    class: "btn btn-ghost", type: "button", onclick: () => fillFromRelease(fillButton, releaseInfo),
-  }, icon("auto_awesome"), "Son sürümden doldur");
-
-  const platformRows = PLATFORMS.map(({ key, label, icon: iconName }) => {
-    const d = draft.downloads[key] || { url: "", size_mb: 0, sha256: "", kind: "" };
-    const enabled = draft.platforms.includes(key);
-    const kinds = key === "android"
-      ? { "": KINDS[""], apk: KINDS.apk }
-      : Object.fromEntries(Object.entries(KINDS).filter(([k]) => k !== "apk"));
-    const row = h("div", { class: `platform-row${enabled ? "" : " off"}`, "data-platform": key },
-      h("label", { class: "check" },
-        h("input", {
-          type: "checkbox", name: `pf_${key}`, checked: enabled,
-          onchange: (e) => row.classList.toggle("off", !e.target.checked),
-        }),
-        icon(iconName), h("span", {}, label)),
-      field("İndirme bağlantısı",
-        h("input", { type: "url", name: `url_${key}`, value: d.url, placeholder: "https://github.com/…/releases/download/…" }),
-        `dl_${key}`),
-      field("Kurulum", select(`kind_${key}`, kinds, d.kind || ""), `kind_${key}`),
-      field("Boyut (MB)",
-        h("input", { type: "number", name: `size_${key}`, min: "0", step: "0.01", value: d.size_mb || "" }),
-        `size_${key}`),
-      h("div", { class: "sha" },
-        field("SHA-256",
-          h("input", { name: `sha_${key}`, value: d.sha256 || "", spellcheck: "false", autocomplete: "off",
-                       placeholder: "Son sürümden doldurulur; CLD Hub indirilen dosyayı bununla doğrular" }),
-          `sha_${key}`)));
-    return row;
-  });
-
-  return [
-    h("div", { class: "section-title" }, icon("info"), "Temel bilgiler"),
-    h("div", { class: "grid-2" },
-      field("ID", h("input", { name: "id", value: draft.id, disabled: isExisting, placeholder: "CLD-XX-01012026" }), "id",
-        isExisting ? "Kurulu uygulamalar bu ID ile eşleştiği için değiştirilemez." : "Harf, rakam, tire ve alt çizgi."),
-      field("Ad", h("input", { name: "name", value: draft.name, placeholder: "CLD Örnek Uygulama" }), "name")),
-    h("div", { class: "grid-3" },
-      field("Tür", select("category", CATEGORIES, draft.category), "category"),
-      field("Durum", select("status", STATUSES, draft.status), "status"),
-      field("Sürüm", h("input", { name: "version", value: draft.version, placeholder: "1.0.0" }), "version")),
-    h("div", { class: "grid-2" },
-      field("Çıkış tarihi", h("input", { type: "date", name: "release_date", value: draft.release_date }), "release_date"),
-      h("div", { class: "check-aligned check-stack" },
-        h("label", { class: "check" },
-          h("input", { type: "checkbox", name: "featured", checked: draft.featured }),
-          h("span", {}, "Vitrinde öne çıkar")),
-        h("label", { class: "check", title: "Kayıt katalogda kalır ama mağazada listelenmez (ör. CLD Hub'ın kendisi)" },
-          h("input", { type: "checkbox", name: "hidden", checked: draft.hidden }),
-          h("span", {}, "Mağazada gizle")))),
-
-    h("div", { class: "section-title" }, icon("palette"), "Logo"),
-    buildLogoField(draft),
-    h("p", { class: "muted small" }, "Logo yoksa ya da yüklenemezse gösterilecek simge:"),
-    iconGrid,
-
-    h("div", { class: "section-title" }, icon("short_text"), "Kısa tanıtım"),
-    h("div", { class: "grid-2" },
-      ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
-        h("input", { name: `subtitle_${lang}`, value: draft.subtitle?.[lang] || "", maxlength: "80",
-                     placeholder: lang === "tr" ? "Tek cümlelik tanıtım (kartlarda görünür)" : "One-line pitch" }),
-        `subtitle_${lang}`))),
-
-    h("div", { class: "section-title" }, icon("description"), "Açıklamalar"),
-    ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
-      h("textarea", { name: `description_${lang}` }, draft.description?.[lang] || ""), `description_${lang}`)),
-
-    h("div", { class: "section-title" }, icon("new_releases"), "Yenilikler (bu sürüm)"),
-    h("div", { class: "grid-2" },
-      ...EDITOR_LANGUAGES.map(([lang, label]) => field(label,
-        h("textarea", { name: `changelog_${lang}`, placeholder: lang === "tr" ? "- Yeni özellik…" : "- New feature…" },
-          draft.changelog?.[lang] || ""), `changelog_${lang}`))),
-    h("p", { class: "muted small" }, "Sürüm numarasını değiştirip kaydedince önceki sürüm notlarıyla birlikte sürüm geçmişine taşınır."),
-
-    h("div", { class: "section-title" }, icon("photo_library"), "Ekran görüntüleri"),
-    field("Görsel adresleri", h("textarea", {
-      name: "screenshots", placeholder: "Her satıra bir adres (https://…png) ya da media/<ID>/… yolu",
-    }, (draft.screenshots || []).join("\n")), "screenshots",
-    "Tüm dillerde gösterilir. Dile özel ekran görüntüleri Faz 3'teki dil sekmeleriyle eklenecek."),
-
-    h("div", { class: "section-title" }, icon("download"), h("span", { class: "grow" }, "Kaynak ve indirmeler")),
-    h("div", { class: "input-with-button" },
-      field("GitHub reposu",
-        h("input", { name: "github_repo", value: draft.github_repo, placeholder: "coffeelakedevv/uygulama-adi" }),
-        "github_repo"),
-      h("div", { class: "field-aligned" }, fillButton)),
-    releaseInfo,
-    h("small", { class: "field-error", "data-error": "downloads" }),
-    ...platformRows,
-  ];
-}
-
-function readEditor(form, draft) {
-  const value = (name) => (form.elements[name]?.value ?? "").trim();
-  const app = structuredClone(draft);
-  if (!form.elements.id.disabled) app.id = value("id");
-  Object.assign(app, {
-    name: value("name"),
-    category: value("category"),
-    status: value("status"),
-    version: value("version").replace(/^v/i, ""),
-    release_date: value("release_date"),
-    featured: form.elements.featured.checked,
-    hidden: form.elements.hidden.checked,
-    logo: value("logo"),
-    // Panelde alanı olmayan dillerin çevirileri korunur.
-    subtitle: { ...draft.subtitle, ...langValues(value, "subtitle") },
-    description: { ...draft.description, ...langValues(value, "description") },
-    changelog: { ...draft.changelog, ...langValues(value, "changelog") },
-    screenshots: value("screenshots").split(/\s*\n\s*/).filter(Boolean),
-    github_repo: value("github_repo"),
-    platforms: [],
-    downloads: {},
-  });
-  for (const { key } of PLATFORMS) {
-    if (!form.elements[`pf_${key}`].checked) continue;
-    app.platforms.push(key);
-    const url = value(`url_${key}`);
-    if (url) {
-      app.downloads[key] = {
-        url, size_mb: Number(value(`size_${key}`)) || 0,
-        sha256: value(`sha_${key}`).toLowerCase().replace(/^sha256:/, ""), kind: value(`kind_${key}`),
-      };
-    }
-  }
-  return app;
-}
-
-function langValues(value, prefix) {
-  return Object.fromEntries(EDITOR_LANGUAGES.map(([lang]) => [lang, value(`${prefix}_${lang}`)]));
-}
-
-function showErrors(form, errors) {
-  for (const el of form.querySelectorAll("[data-error]")) el.textContent = errors[el.dataset.error] || "";
-  for (const el of form.querySelectorAll(".field[data-key]")) {
-    el.classList.toggle("invalid", Boolean(errors[el.dataset.key]));
-  }
-  const count = Object.keys(errors).length;
-  $("editor-error").textContent = count ? `${count} alanı düzeltmen gerekiyor.` : "";
-  form.querySelector(".field.invalid input, .field.invalid select, .field.invalid textarea")?.focus();
-}
-
-function saveEditor(event) {
-  event.preventDefault();
-  const form = $("editor-form");
-  const { originalId, draft } = state.editing;
-  const app = readEditor(form, draft);
-  const others = state.catalog.apps.filter((a) => a.id !== originalId);
-  const errors = validateApp(app, others, originalId);
-  showErrors(form, errors);
-  if (Object.keys(errors).length) return;
-
-  if (app.featured) for (const other of state.catalog.apps) other.featured = false;
-  const index = state.catalog.apps.findIndex((a) => a.id === originalId);
-  if (index >= 0) archivePreviousRelease(state.catalog.apps[index], app);
-  if (index >= 0) state.catalog.apps[index] = app;
-  else state.catalog.apps.unshift(app);
-  state.editing = null;
-  $("editor").close();
+function addCatalogLanguage() {
+  const box = $("lang-input");
+  const code = normalizeCode(box.value);
+  if (!code) return;
+  if (!LANG_PATTERN.test(code)) { $("lang-error").textContent = t("error.lang_pattern", { lang: code }); return; }
+  if (state.catalog.languages.includes(code)) { $("lang-error").textContent = t("languages.exists", { lang: code }); return; }
+  state.catalog.languages = [...state.catalog.languages, code];
+  box.value = "";
+  renderLanguages();
   render();
-  toast(`"${app.name}" kaydedildi. Yayınlamayı unutma.`, "success");
+  refreshEditor();
+  toast(t("languages.added", { lang: nativeLanguageName(code) }));
 }
 
-async function fillFromRelease(button, info) {
-  const form = $("editor-form");
-  const repo = form.elements.github_repo.value.trim();
-  if (!repo) {
-    showErrors(form, { github_repo: "Önce GitHub reposunu yaz." });
-    return;
-  }
-  button.disabled = true;
-  info.textContent = "Son sürüm alınıyor…";
-  try {
-    const release = await state.client.latestRelease(repo);
-    form.elements.version.value = (release.tag_name || "").replace(/^v/i, "");
-    if (release.published_at) form.elements.release_date.value = release.published_at.slice(0, 10);
+async function removeCatalogLanguage(code) {
+  const used = languageUsage(state.catalog.apps, code);
+  const ok = await confirmDialog({
+    title: t("languages.remove_title", { lang: nativeLanguageName(code) }),
+    text: used ? t("languages.remove_text_used", { count: used }) : t("languages.remove_text"),
+    ok: t("common.remove"),
+  });
+  if (!ok) return;
+  removeLanguage(state.catalog.apps, code);
+  state.catalog.languages = state.catalog.languages.filter((c) => c !== code);
+  renderLanguages();
+  render();
+  refreshEditor();
+}
 
-    const matched = [], unmatched = [];
-    for (const asset of release.assets || []) {
-      const platform = guessPlatform(asset.name);
-      if (!platform) {
-        unmatched.push(asset.name);
-        continue;
-      }
-      const label = PLATFORMS.find((p) => p.key === platform).label;
-      if (form.elements[`url_${platform}`].value === asset.browser_download_url) {
-        const sha = form.elements[`sha_${platform}`];
-        if (!sha.value && asset.digest) sha.value = asset.digest.replace(/^sha256:/, "");
-        matched.push(`${label}: ${asset.name} (zaten güncel)`);
-        continue;
-      }
-      form.elements[`pf_${platform}`].checked = true;
-      form.querySelector(`[data-platform="${platform}"]`).classList.remove("off");
-      form.elements[`url_${platform}`].value = asset.browser_download_url;
-      form.elements[`size_${platform}`].value = (asset.size / 1048576).toFixed(2);
-      // GitHub, release dosyalarının SHA-256 özetini "sha256:…" olarak verir.
-      form.elements[`sha_${platform}`].value = (asset.digest || "").replace(/^sha256:/, "");
-      const kind = guessKind(asset.name);
-      if (form.elements[`kind_${platform}`].querySelector(`option[value="${kind}"]`)) {
-        form.elements[`kind_${platform}`].value = kind;
-      }
-      matched.push(`${label}: ${asset.name}`);
-    }
-    info.textContent = [
-      `${release.tag_name} (${(release.published_at || "").slice(0, 10)})`,
-      matched.length ? `Eşleşen: ${matched.join(", ")}` : "Otomatik eşleşen dosya yok.",
-      unmatched.length ? `Eşleşmeyen: ${unmatched.join(", ")} (bağlantıyı elle girebilirsin)` : "",
-    ].filter(Boolean).join(" · ");
-  } catch (err) {
-    info.textContent = err.status === 404 ? "Bu repoda yayınlanmış bir sürüm bulunamadı." : err.message;
-  } finally {
-    button.disabled = false;
+// ── Yayınlama ────────────────────────────────────────────────
+
+function describeChange(change) {
+  const kind = t(`diff.${change.kind}`);
+  switch (change.field) {
+    case "name": case "subtitle": case "description": case "notes":
+      return `${t(`diff.field.${change.field}`)} · ${nativeLanguageName(change.lang)} ${kind}`;
+    case "version": case "date": case "category": case "status":
+      return change.from && change.to ? `${t(`diff.field.${change.field}`)}: ${change.from} → ${change.to}`
+        : `${t(`diff.field.${change.field}`)} ${kind}`;
+    case "platform":
+      return `${PLATFORMS.find((p) => p.key === change.platform)?.label || change.platform} ${t("diff.file")} ${kind}`;
+    case "screenshots":
+      return t("diff.screenshots", { group: change.group === "default" ? t("media.all_languages") : nativeLanguageName(change.group),
+                                     from: change.from, to: change.to });
+    default:
+      return `${t(`diff.field.${change.field}`)} ${kind}`;
   }
 }
 
-// ── Yayınlama ve dışa aktarma ────────────────────────────────
-
-function defaultCommitMessage({ added, modified, removed }) {
+function defaultCommitMessage(diff) {
   const parts = [];
-  if (added.length) parts.push(`add ${added.join(", ")}`);
-  if (modified.length) parts.push(`update ${modified.join(", ")}`);
-  if (removed.length) parts.push(`remove ${removed.join(", ")}`);
+  if (diff.added.length) parts.push(`add ${diff.added.map((a) => a.id).join(", ")}`);
+  if (diff.modified.length) parts.push(`update ${diff.modified.map((a) => a.id).join(", ")}`);
+  if (diff.removed.length) parts.push(`remove ${diff.removed.join(", ")}`);
+  if (diff.languages) parts.push(`languages ${state.catalog.languages.join(", ")}`);
   const message = `catalog: ${parts.join("; ")}`;
-  return message.length > 72 ? `catalog: ${added.length + modified.length + removed.length} changes` : message;
+  return message.length > 72 ? `catalog: ${diff.count} changes` : message;
 }
 
 function openPublish() {
   const diff = changes();
   if (!diff.count) return;
-  const items = [
-    ...diff.added.map((n) => `Eklendi: ${n}`),
-    ...diff.modified.map((n) => `Güncellendi: ${n}`),
-    ...diff.removed.map((n) => `Silindi: ${n}`),
-  ];
-  $("change-list").replaceChildren(...items.map((text) => h("li", {}, text)));
+  const base = defaultLang();
+  const media = mediaChanges();
+  const items = [];
+  const appItem = (iconName, cls, title, lines, warning) => h("li", { class: `change ${cls}` },
+    icon(iconName),
+    h("div", { class: "grow" }, h("b", {}, title),
+      lines.length > 0 && h("ul", { class: "change-details" }, ...lines.map((line) => h("li", {}, line))),
+      warning && h("div", { class: "change-warning" }, icon("translate"), warning)));
+  const warningFor = (app) => {
+    const missing = state.catalog.languages.slice(1).filter((lang) => missingTexts(app, lang, base).length);
+    return missing.length ? t("publish.missing", { langs: missing.map(nativeLanguageName).join(", ") }) : null;
+  };
+  for (const app of diff.added) items.push(appItem("add_circle", "added", t("publish.added", { name: app.name }), [], warningFor(app)));
+  for (const app of diff.modified) {
+    const before = JSON.parse(state.baseline.get(app.id));
+    const lines = diffApp(before, serializeApp(app, base), base).map(describeChange);
+    const shown = lines.slice(0, 6);
+    if (lines.length > 6) shown.push(t("publish.more", { count: lines.length - 6 }));
+    items.push(appItem("edit", "modified", t("publish.modified", { name: app.name }), shown, warningFor(app)));
+  }
+  for (const id of diff.removed) items.push(appItem("remove_circle", "removed", t("publish.removed", { name: id }), []));
+  if (diff.languages) {
+    items.push(appItem("translate", "modified", t("publish.languages"),
+      [`${state.baselineLanguages.join(", ")} → ${state.catalog.languages.join(", ")}`]));
+  }
+  $("change-list").replaceChildren(...items);
+  const mediaLines = [
+    media.uploads.length && t("publish.uploads", { count: media.uploads.length }),
+    media.deletions.length && t("publish.deletions", { count: media.deletions.length }),
+  ].filter(Boolean);
+  $("media-summary").replaceChildren(...mediaLines.map((line) => h("div", {}, icon("image"), line)));
+  $("media-summary").hidden = !mediaLines.length;
   $("commit-message").value = defaultCommitMessage(diff);
   $("publish-error").textContent = "";
-  $("publish").showModal();
+  $("publish-progress").hidden = true;
+  const dialog = $("publish");
+  dialog.classList.remove("done");
+  openDialog(dialog);
 }
 
 async function publish(event) {
   event.preventDefault();
   const button = $("btn-publish-confirm");
   const message = $("commit-message").value.trim() || defaultCommitMessage(changes());
+  const { uploads, deletions } = mediaChanges();
+  const bar = $("publish-progress");
   button.disabled = true;
+  button.classList.add("loading");
+  bar.hidden = false;
+  bar.value = 0;
   try {
-    const result = await state.client.writeCatalog(serializeCatalog(state.catalog), state.sha, message);
-    state.sha = result.sha;
+    const result = await state.client.publish({
+      catalogText: serializeCatalog(state.catalog), expectedSha: state.sha, uploads, deletions, message,
+      onProgress: (done, total) => { bar.max = total; bar.value = done; },
+    });
+    state.sha = result.catalogSha;
+    clearPending();
     resetBaseline();
-    $("publish").close();
     render();
-    toast("Katalog yayınlandı. Uygulamalara birkaç dakika içinde ulaşır.", "success",
-      { href: result.commitUrl, text: "Commit'i gör" });
+    $("commit-link").href = result.commitUrl;
+    $("publish").classList.add("done");
   } catch (err) {
-    $("publish-error").textContent = err.message;
+    $("publish-error").textContent = errorText(err);
+    bar.hidden = true;
   } finally {
     button.disabled = false;
+    button.classList.remove("loading");
   }
 }
 
@@ -679,24 +426,50 @@ function exportCatalog() {
   }
 }
 
+// ── Menü ─────────────────────────────────────────────────────
+
+function toggleMenu(force) {
+  const menu = $("menu");
+  const open = force ?? menu.hidden;
+  menu.hidden = !open;
+  $("btn-menu").setAttribute("aria-expanded", String(open));
+  if (open) menu.querySelector("button:not([hidden])")?.focus();
+}
+
 // ── Başlatma ─────────────────────────────────────────────────
 
+function relocalize() {
+  applyStatic();
+  if (state.catalog) {
+    $("source-label").replaceChildren(...sourceLabel());
+    renderFilters();
+    render();
+  }
+  refreshEditor();
+  if ($("languages").open) renderLanguages();
+}
+
 function init() {
+  applyStatic();
+  const langSeg = segmented($("seg-lang"), { value: getLang(), onChange: (v) => { setLang(v); relocalize(); } });
+  const themeChoice = store.get(localStorage, THEME_KEY) || "system";
+  applyTheme(themeChoice);
+  segmented($("seg-theme"), { value: themeChoice, onChange: (v) => { store.set(localStorage, THEME_KEY, v); applyTheme(v); } });
+  darkQuery.addEventListener("change", () => applyTheme(store.get(localStorage, THEME_KEY) || "system"));
+  void langSeg;
+
   const form = $("connect-form");
   const saved = savedConnection();
   if (saved) {
     for (const key of ["owner", "repo", "branch", "path"]) form[key].value = saved[key] || form[key].value;
     form.remember.checked = saved.remember;
   }
-
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    const conn = Object.fromEntries(
-      ["owner", "repo", "branch", "path", "token"].map((k) => [k, form[k].value.trim()]));
+    const conn = Object.fromEntries(["owner", "repo", "branch", "path", "token"].map((k) => [k, form[k].value.trim()]));
     conn.remember = form.remember.checked;
-    const missing = Object.entries(conn).filter(([k, v]) => k !== "remember" && !v);
-    if (missing.length) {
-      $("connect-error").textContent = "Tüm alanları doldur.";
+    if (Object.entries(conn).some(([k, v]) => k !== "remember" && !v)) {
+      $("connect-error").textContent = t("connect.fill_all");
       return;
     }
     connect(conn);
@@ -711,14 +484,35 @@ function init() {
   $("search").addEventListener("input", (e) => { state.filter.query = e.target.value; render(); });
   $("btn-add").addEventListener("click", () => openEditor());
   $("btn-publish").addEventListener("click", openPublish);
-  $("btn-export").addEventListener("click", exportCatalog);
-  $("btn-reload").addEventListener("click", reload);
-  $("btn-disconnect").addEventListener("click", disconnect);
-  $("editor-form").addEventListener("submit", saveEditor);
+  $("btn-menu").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
+  document.addEventListener("click", (e) => { if (!$("menu").hidden && !e.target.closest("#menu")) toggleMenu(false); });
+  $("menu-reload").addEventListener("click", () => { toggleMenu(false); reload(); });
+  $("menu-export").addEventListener("click", () => { toggleMenu(false); exportCatalog(); });
+  $("menu-languages").addEventListener("click", () => { toggleMenu(false); openLanguages(); });
+  $("menu-disconnect").addEventListener("click", () => { toggleMenu(false); disconnect(); });
   $("publish-form").addEventListener("submit", publish);
-  for (const button of document.querySelectorAll("[data-close]")) {
-    button.addEventListener("click", () => button.closest("dialog").close());
-  }
+  $("lang-add").addEventListener("click", addCatalogLanguage);
+  $("lang-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addCatalogLanguage(); } });
+  $("lang-suggestions").replaceChildren(...["de", "fr", "es", "it", "pt-BR", "ru", "ar", "ja", "ko", "zh", "nl", "pl", "uk", "hi", "id"]
+    .map((code) => h("option", { value: code }, languageName(code))));
+
+  guardDialog($("publish"));
+  guardDialog($("languages"));
+  guardDialog($("confirm"));
+  initEditor({ onSaved: () => render(), openLanguages });
+
+  document.addEventListener("keydown", (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+    const dialogOpen = document.querySelector("dialog[open]");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      if (isEditorOpen()) { e.preventDefault(); saveShortcut(); }
+      return;
+    }
+    if (e.key === "Escape" && !$("menu").hidden) { toggleMenu(false); return; }
+    if (typing || dialogOpen || !state.catalog || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("search").focus(); }
+    else if (e.key.toLowerCase() === "n") { e.preventDefault(); openEditor(); }
+  });
 
   window.addEventListener("beforeunload", (e) => {
     if (state.catalog && changes().count) e.preventDefault();
@@ -726,7 +520,12 @@ function init() {
 
   if (saved?.token) {
     form.token.value = saved.token;
-    connect({ ...saved });
+    $("view-connect").hidden = true;
+    $("view-catalog").hidden = false;
+    $("app-grid").replaceChildren(...skeletonCards(4));
+    connect({ ...saved }).then(() => {
+      if (!state.catalog) { $("view-catalog").hidden = true; $("view-connect").hidden = false; }
+    });
   }
 }
 
