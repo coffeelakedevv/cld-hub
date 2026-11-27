@@ -6,8 +6,8 @@
 // ekran görüntüleri…) taslağın `keep` kısmında olduğu gibi korunur ve geri yazılır.
 
 export const CATALOG_VERSION = 3;
-export const DEFAULT_LANGUAGES = ["tr", "en"];
-export const EDITOR_LANGUAGES = [["tr", "Türkçe"], ["en", "İngilizce"]];   // Faz 3'te dil sekmeleri gelecek
+export const DEFAULT_LANGUAGES = ["en", "tr"];   // ilki varsayılan dil: CLD Hub küresel, ana dil İngilizce
+export const EDITOR_LANGUAGES = [["en", "İngilizce"], ["tr", "Türkçe"]];   // Faz 3'te dil sekmeleri gelecek
 
 export const PLATFORMS = [
   { key: "windows", label: "Windows", icon: "desktop_windows" },
@@ -296,7 +296,7 @@ export function serializeCatalog(catalog) {
 
 /** Değişiklik tespiti için zaman damgasından bağımsız karşılaştırma anahtarı. */
 export function fingerprint(app) {
-  return JSON.stringify(serializeApp(app, "tr"));
+  return JSON.stringify(serializeApp(app, "en"));
 }
 
 /** Logo/ekran görüntüsü yolunu tarayıcıda gösterilebilir adrese çevirir. */

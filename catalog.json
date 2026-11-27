@@ -2,8 +2,8 @@
   "catalog_version": 3,
   "last_updated": "2026-11-26T19:03:53+00:00",
   "languages": [
-    "tr",
-    "en"
+    "en",
+    "tr"
   ],
   "catalog_url": "https://raw.githubusercontent.com/coffeelakedevv/cld-hub/main/catalog.json",
   "stats_url": "https://coffeelakedevv.github.io/cld-hub/stats.json",
