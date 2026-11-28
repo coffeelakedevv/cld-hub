@@ -1,6 +1,6 @@
 // Panelin ortak durumu ve değişiklik takibi.
 
-import { fingerprint, mediaPaths, resolveMedia } from "./catalog.js";
+import { collectionsFingerprint, fingerprint, mediaPaths, resolveMedia } from "./catalog.js";
 
 export const state = {
   mode: null,              // "github" | "local"
@@ -9,6 +9,7 @@ export const state = {
   catalog: null,           // { catalog_url, languages, media_base, extra, apps }
   baseline: new Map(),     // id → serileştirilmiş kayıt (son yükleme/yayın anı)
   baselineLanguages: [],
+  baselineCollections: "[]",
   baselineMedia: new Set(),
   pending: new Map(),      // media/… yolu → { bytes, url } (henüz yayınlanmamış görseller)
   filter: { query: "", category: "all", status: "all" },
@@ -21,6 +22,8 @@ export function resetBaseline() {
   const lang = defaultLang();
   state.baseline = new Map(state.catalog.apps.map((a) => [a.id, fingerprint(a, lang)]));
   state.baselineLanguages = [...state.catalog.languages];
+  state.catalog.collections ||= [];
+  state.baselineCollections = collectionsFingerprint(state.catalog.collections, lang);
   state.baselineMedia = new Set(state.catalog.apps.flatMap(mediaPaths));
 }
 
@@ -60,8 +63,9 @@ export function changes() {
   }
   for (const id of state.baseline.keys()) if (!current.has(id)) removed.push(id);
   const languages = state.baselineLanguages.join(",") !== state.catalog.languages.join(",");
-  return { added, modified, removed, languages,
-           count: added.length + modified.length + removed.length + (languages ? 1 : 0) };
+  const collections = state.baselineCollections !== collectionsFingerprint(state.catalog.collections, lang);
+  return { added, modified, removed, languages, collections,
+           count: added.length + modified.length + removed.length + (languages ? 1 : 0) + (collections ? 1 : 0) };
 }
 
 /** Yayında yüklenecek ve silinecek görseller. */

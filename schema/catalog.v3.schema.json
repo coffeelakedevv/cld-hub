@@ -20,9 +20,22 @@
       "description": "Göreli görsel yollarının (media/…) çözüldüğü adres; / ile biter.",
       "type": "string", "pattern": "^https://.+/$"
     },
-    "apps": { "type": "array", "items": { "$ref": "#/$defs/app" } }
+    "apps": { "type": "array", "items": { "$ref": "#/$defs/app" } },
+    "collections": {
+      "description": "Elle seçilmiş raflar; sıra mağazadaki görünüş sırasıdır.",
+      "type": "array", "items": { "$ref": "#/$defs/collection" }
+    }
   },
   "$defs": {
+    "collection": {
+      "type": "object", "required": ["id", "title", "apps"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "title": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "apps": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmpty" } }
+      }
+    },
     "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$" },
     "nonEmpty": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "text": {

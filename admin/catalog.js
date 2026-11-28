@@ -321,7 +321,11 @@ export function missingTexts(app, lang, defaultLang) {
 }
 
 /** Bir dilin tüm uygulamalardaki metinlerini ve ekran görüntüsü grubunu siler (dil kataloğdan çıkarılınca). */
-export function removeLanguage(apps, lang) {
+export function removeLanguage(apps, lang, collections = []) {
+  for (const collection of collections) {
+    delete collection.title?.[lang];
+    delete collection.description?.[lang];
+  }
   let touched = 0;
   for (const app of apps) {
     let changed = false;
@@ -339,12 +343,14 @@ export function removeLanguage(apps, lang) {
 }
 
 /** Bir dilde içerik olan uygulama sayısı (dil çıkarılmadan önce uyarı için). */
-export function languageUsage(apps, lang) {
-  return apps.filter((app) => ["names", ...TEXT_FIELDS].some((f) => app[f]?.[lang]) || app.screenshots?.[lang]).length;
+export function languageUsage(apps, lang, collections = []) {
+  return apps.filter((app) => ["names", ...TEXT_FIELDS].some((f) => app[f]?.[lang]) || app.screenshots?.[lang]).length
+    + collections.filter((c) => c.title?.[lang] || c.description?.[lang]).length;
 }
 
 // Panelin değiştirmediği üst düzey alanlar (ör. stats_url) olduğu gibi korunur.
-const MANAGED_KEYS = new Set(["catalog_version", "last_updated", "catalog_url", "languages", "media_base", "apps"]);
+const MANAGED_KEYS = new Set(["catalog_version", "last_updated", "catalog_url", "languages", "media_base", "apps",
+                              "collections"]);
 const TOP_ORDER = ["catalog_version", "last_updated", "languages", "catalog_url", "stats_url", "media_base"];
 
 export function parseCatalog(text) {
@@ -362,6 +368,8 @@ export function parseCatalog(text) {
     media_base: data.media_base || "",
     extra: Object.fromEntries(Object.entries(data).filter(([key]) => !MANAGED_KEYS.has(key))),
     apps: data.apps.filter((a) => a && a.id).map((a) => normalizeApp(a, languages[0])),
+    collections: (Array.isArray(data.collections) ? data.collections : [])
+      .filter((c) => c && typeof c === "object").map((c) => normalizeCollection(c, languages[0])),
   };
 }
 
@@ -378,6 +386,9 @@ export function serializeCatalog(catalog) {
   for (const key of TOP_ORDER) if (top[key] !== undefined) data[key] = top[key];
   for (const [key, value] of Object.entries(top)) if (!(key in data)) data[key] = value;
   data.apps = catalog.apps.map((app) => serializeApp(app, catalog.languages[0]));
+  if (catalog.collections?.length) {
+    data.collections = catalog.collections.map((c) => serializeCollection(c, catalog.languages[0]));
+  }
   return JSON.stringify(data, null, 2) + "\n";
 }
 
@@ -510,4 +521,67 @@ export function validateApp(app, allApps, originalId = null) {
   }
   if (published && !Object.values(app.downloads).some((d) => d.url)) fail("downloads", "downloads_required");
   return errors;
+}
+
+// ── Koleksiyonlar ────────────────────────────────────────────
+// Katalogda üst düzey `collections`: [{ id, title, description, apps: [id…] }]. Sıra = mağazadaki sıra.
+
+export const COLLECTION_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+export function emptyCollection() {
+  return { id: "", title: {}, description: {}, apps: [] };
+}
+
+export function normalizeCollection(raw, defaultLang) {
+  const apps = Array.isArray(raw?.apps) ? raw.apps.filter((a) => typeof a === "string" && a) : [];
+  return {
+    id: typeof raw?.id === "string" ? raw.id : "",
+    title: textMap(raw?.title, defaultLang),
+    description: textMap(raw?.description, defaultLang),
+    apps: [...new Set(apps)],
+  };
+}
+
+export function serializeCollection(collection, defaultLang) {
+  const out = { id: collection.id, title: textValue(cleanText(collection.title), defaultLang) };
+  const description = cleanText(collection.description);
+  if (hasText(description)) out.description = textValue(description, defaultLang);
+  out.apps = [...collection.apps];
+  return out;
+}
+
+export function collectionsFingerprint(collections, defaultLang = FALLBACK_LANG) {
+  return JSON.stringify((collections || []).map((c) => serializeCollection(c, defaultLang)));
+}
+
+/** Başlıktan kimlik önerisi: "Game night!" → "game-night". */
+export function slugify(text) {
+  return String(text || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/ı/g, "i").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+
+/** Alan anahtarı → { code, ...params }; boşsa koleksiyon geçerlidir. */
+export function validateCollection(collection, others, appIds, defaultLang) {
+  const errors = {};
+  const fail = (key, code, params = {}) => { errors[key] = { code, ...params }; };
+  if (!collection.id) fail("id", "id_required");
+  else if (!COLLECTION_ID_PATTERN.test(collection.id)) fail("id", "collection_id_pattern");
+  else if (others.some((c) => c.id === collection.id)) fail("id", "id_taken");
+  if (!cleanText(collection.title)[defaultLang]) fail("title", "title_required", { lang: defaultLang });
+  if (!collection.apps.length) fail("apps", "collection_empty");
+  return errors;
+}
+
+/** Koleksiyonda olup katalogda olmayan uygulama kimlikleri. */
+export function missingCollectionApps(collection, appIds) {
+  const known = new Set(appIds);
+  return collection.apps.filter((id) => !known.has(id));
+}
+
+/** Uygulama silinince ya da kimliği değişince koleksiyonları günceller. */
+export function renameInCollections(collections, oldId, newId = null) {
+  for (const collection of collections || []) {
+    collection.apps = collection.apps.flatMap((id) => (id !== oldId ? [id] : newId ? [newId] : []));
+    collection.apps = [...new Set(collection.apps)];
+  }
 }

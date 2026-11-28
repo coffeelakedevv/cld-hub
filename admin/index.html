@@ -48,6 +48,7 @@
         </button>
         <div class="menu" id="menu" role="menu" hidden>
           <button type="button" role="menuitem" id="menu-languages"><span class="icon">translate</span><span data-i18n="menu.languages">Catalog languages</span></button>
+          <button type="button" role="menuitem" id="menu-collections"><span class="icon">collections_bookmark</span><span data-i18n="menu.collections">Collections</span></button>
           <button type="button" role="menuitem" id="menu-reload"><span class="icon">refresh</span><span data-i18n="menu.reload">Reload catalog</span></button>
           <button type="button" role="menuitem" id="menu-export"><span class="icon">download</span><span data-i18n="menu.export">Download catalog.json</span></button>
           <hr>
@@ -203,6 +204,21 @@
     <div class="modal-actions">
       <button class="btn btn-primary" type="button" data-close data-i18n="common.done">Done</button>
     </div>
+  </dialog>
+
+  <!-- Koleksiyonlar -->
+  <dialog id="collections" class="modal wide" aria-labelledby="collections-title">
+    <div id="coll-list-view">
+      <h2 id="collections-title" data-i18n="collections.title">Collections</h2>
+      <p class="muted" data-i18n="collections.text">Hand-picked shelves on the Discover page.</p>
+      <ul class="coll-list" id="coll-list"></ul>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" id="coll-add"><span class="icon">add</span><span data-i18n="collections.add">New collection</span></button>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" type="button" data-close data-i18n="common.done">Done</button>
+      </div>
+    </div>
+    <div id="coll-edit-view" class="coll-edit" hidden></div>
   </dialog>
 
   <!-- Onay -->

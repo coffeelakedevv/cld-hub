@@ -68,9 +68,22 @@ def rule_errors_and_warnings(catalog: dict, root: Path) -> tuple[list[str], list
                     and app.get("status") == "released":
                 warnings.append(f"{app_id}: {platform} dosyasının SHA-256'sı yok (indirme doğrulanamaz).")
 
-    featured = [a.get("id") for a in catalog.get("apps") or [] if isinstance(a, dict) and a.get("featured")]
-    if len(featured) > 1:
-        warnings.append(f"Birden fazla öne çıkan uygulama var ({', '.join(featured)}); vitrinde ilki görünür.")
+    collection_ids = set()
+    for index, collection in enumerate(catalog.get("collections") or []):
+        if not isinstance(collection, dict):
+            continue
+        cid = collection.get("id") or f"collections/{index}"
+        if cid in collection_ids:
+            errors.append(f"Koleksiyon {cid}: bu kimlik birden fazla kez geçiyor.")
+        collection_ids.add(cid)
+        unknown = [a for a in collection.get("apps") or [] if isinstance(a, str) and a not in seen]
+        if unknown:
+            warnings.append(f"Koleksiyon {cid}: katalogda olmayan uygulama: {', '.join(unknown)} (atlanır).")
+        title = collection.get("title")
+        if isinstance(title, dict):
+            missing = [lang for lang in languages if not title.get(lang)]
+            if missing:
+                warnings.append(f"Koleksiyon {cid}: başlık çevirisi eksik: {', '.join(missing)}")
     return errors, warnings
 
 

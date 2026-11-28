@@ -881,7 +881,6 @@ function save() {
     return;
   }
   $("editor-error").textContent = "";
-  if (app.featured) for (const other of state.catalog.apps) other.featured = false;
   const index = state.catalog.apps.findIndex((a) => a.id === originalId);
   if (index >= 0) {
     archivePreviousRelease(state.catalog.apps[index], app);
@@ -891,7 +890,7 @@ function save() {
   }
   state.editing = null;
   closeDialog($("editor"));
-  hooks.onSaved(app);
+  hooks.onSaved(app, originalId);
   toast(t("editor.saved", { name: app.name }));
 }
 

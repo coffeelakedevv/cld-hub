@@ -183,6 +183,55 @@ await test("release file guesses", () => {
   assert.equal(guessKind("app.zip"), "zip");
 });
 
+// ── Koleksiyonlar ────────────────────────────────────────────
+
+await test("collections round trip, order and plain default-language text", () => {
+  const raw = {
+    catalog_version: 3, languages: ["en", "tr"], apps: [rich],
+    collections: [
+      { id: "game-night", title: { en: "Game night", tr: "Oyun gecesi" }, description: "Play together", apps: [rich.id, "GONE"] },
+      { id: "starter", title: "Starter pack", apps: [rich.id] },
+    ],
+  };
+  const catalog = parseCatalog(JSON.stringify(raw));
+  assert.equal(catalog.collections.length, 2);
+  assert.deepEqual(catalog.collections[0].title, { en: "Game night", tr: "Oyun gecesi" });
+  assert.ok(!("collections" in catalog.extra), "collections are managed, not passed through");
+  const again = JSON.parse(serializeCatalog(catalog));
+  assert.deepEqual(again.collections, raw.collections);
+  assert.deepEqual(Object.keys(again).slice(-2), ["apps", "collections"]);
+  catalog.collections = [];
+  assert.ok(!("collections" in JSON.parse(serializeCatalog(catalog))), "an empty list is left out");
+});
+
+await test("collection validation, slugs and app renames", () => {
+  const { validateCollection, slugify, renameInCollections, missingCollectionApps, emptyCollection } = catalogJs;
+  const draft = emptyCollection();
+  assert.deepEqual(Object.fromEntries(Object.entries(validateCollection(draft, [], [], "en")).map(([k, v]) => [k, v.code])),
+    { id: "id_required", title: "title_required", apps: "collection_empty" });
+  Object.assign(draft, { id: "Game Night", title: { tr: "Oyun" }, apps: ["A"] });
+  assert.equal(validateCollection(draft, [], ["A"], "en").id.code, "collection_id_pattern");
+  assert.equal(validateCollection(draft, [], ["A"], "en").title.code, "title_required");
+  Object.assign(draft, { id: "game-night", title: { en: "Game night" } });
+  assert.deepEqual(validateCollection(draft, [], ["A"], "en"), {});
+  assert.equal(validateCollection(draft, [{ id: "game-night" }], ["A"], "en").id.code, "id_taken");
+  assert.equal(slugify("Çılgın Oyun Gecesi!"), "cilgin-oyun-gecesi");
+  assert.equal(slugify("  Été — Top 10  "), "ete-top-10");
+  const list = [{ apps: ["A", "B"] }, { apps: ["B", "C"] }];
+  renameInCollections(list, "B", "C");
+  assert.deepEqual(list.map((c) => c.apps), [["A", "C"], ["C"]]);
+  renameInCollections(list, "C");
+  assert.deepEqual(list.map((c) => c.apps), [["A"], []]);
+  assert.deepEqual(missingCollectionApps({ apps: ["A", "Z"] }, ["A"]), ["Z"]);
+});
+
+await test("removing a language also clears collection texts", () => {
+  const collections = [{ id: "x", title: { en: "X", tr: "İks" }, description: { tr: "Açıklama" }, apps: [] }];
+  assert.equal(languageUsage([], "tr", collections), 1);
+  removeLanguage([], "tr", collections);
+  assert.deepEqual(collections[0].title, { en: "X" });
+  assert.deepEqual(collections[0].description, {});
+});
 // ── Arayüz metinleri ─────────────────────────────────────────
 
 const { DICTIONARIES, t } = await import(pathToFileURL(join(root, "admin", "locales.js")).href);
@@ -209,7 +258,7 @@ await test("English and Turkish UI texts have the same keys and placeholders", (
 await test("every UI text key used in the panel exists", () => {
   const en = leaves(DICTIONARIES.en);
   const used = new Set();
-  for (const file of ["app.js", "editor.js", "ui.js"]) {
+  for (const file of ["app.js", "editor.js", "ui.js", "collections.js"]) {
     const code = readFileSync(join(root, "admin", file), "utf8");
     for (const m of code.matchAll(/\bt\(\s*"([\w.]+)"/g)) used.add(m[1]);
   }

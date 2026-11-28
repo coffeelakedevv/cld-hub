@@ -1,8 +1,10 @@
 import { GitHubClient, GitHubError } from "./github.js";
 import {
   CATEGORIES, DEFAULT_LANGUAGES, LANG_PATTERN, PLATFORMS, STATUSES,
-  diffApp, languageUsage, missingTexts, parseCatalog, removeLanguage, serializeApp, serializeCatalog, translationStatus,
+  diffApp, languageUsage, missingTexts, parseCatalog, removeLanguage, renameInCollections, serializeApp, serializeCatalog,
+  translationStatus,
 } from "./catalog.js";
+import { initCollections, openCollections, refreshCollections } from "./collections.js";
 import { initEditor, isEditorOpen, logoTile, normalizeCode, openEditor, refreshEditor, saveShortcut } from "./editor.js";
 import { applyStatic, getLang, languageName, nativeLanguageName, setLang, t } from "./locales.js";
 import {
@@ -249,10 +251,8 @@ function renderCard(app, index) {
 }
 
 function toggleFeatured(app) {
-  const enable = !app.featured;
-  // Uygulama vitrinde tek bir öğe gösterir; işaret tekil tutulur.
-  for (const other of state.catalog.apps) other.featured = false;
-  app.featured = enable;
+  // Birden çok öne çıkan uygulama Keşfet'in üstünde sırayla gösterilir.
+  app.featured = !app.featured;
   render();
 }
 
@@ -260,6 +260,7 @@ async function removeApp(app) {
   const ok = await confirmDialog({ title: t("remove.title", { name: app.name || app.id }), text: t("remove.text"), ok: t("common.delete") });
   if (!ok) return;
   state.catalog.apps = state.catalog.apps.filter((a) => a !== app);
+  renameInCollections(state.catalog.collections, app.id);
   render();
   toast(t("remove.done", { name: app.name || app.id }), "info");
 }
@@ -298,14 +299,14 @@ function addCatalogLanguage() {
 }
 
 async function removeCatalogLanguage(code) {
-  const used = languageUsage(state.catalog.apps, code);
+  const used = languageUsage(state.catalog.apps, code, state.catalog.collections);
   const ok = await confirmDialog({
     title: t("languages.remove_title", { lang: nativeLanguageName(code) }),
     text: used ? t("languages.remove_text_used", { count: used }) : t("languages.remove_text"),
     ok: t("common.remove"),
   });
   if (!ok) return;
-  removeLanguage(state.catalog.apps, code);
+  removeLanguage(state.catalog.apps, code, state.catalog.collections);
   state.catalog.languages = state.catalog.languages.filter((c) => c !== code);
   renderLanguages();
   render();
@@ -338,6 +339,7 @@ function defaultCommitMessage(diff) {
   if (diff.modified.length) parts.push(`update ${diff.modified.map((a) => a.id).join(", ")}`);
   if (diff.removed.length) parts.push(`remove ${diff.removed.join(", ")}`);
   if (diff.languages) parts.push(`languages ${state.catalog.languages.join(", ")}`);
+  if (diff.collections) parts.push("collections");
   const message = `catalog: ${parts.join("; ")}`;
   return message.length > 72 ? `catalog: ${diff.count} changes` : message;
 }
@@ -369,6 +371,12 @@ function openPublish() {
   if (diff.languages) {
     items.push(appItem("translate", "modified", t("publish.languages"),
       [`${state.baselineLanguages.join(", ")} → ${state.catalog.languages.join(", ")}`]));
+  }
+  if (diff.collections) {
+    const before = JSON.parse(state.baselineCollections).map((c) => c.id);
+    const after = state.catalog.collections.map((c) => c.id);
+    items.push(appItem("collections_bookmark", "modified", t("publish.collections"),
+      [`${before.join(", ") || "—"} → ${after.join(", ") || "—"}`]));
   }
   $("change-list").replaceChildren(...items);
   const mediaLines = [
@@ -447,6 +455,7 @@ function relocalize() {
   }
   refreshEditor();
   if ($("languages").open) renderLanguages();
+  refreshCollections();
 }
 
 function init() {
@@ -489,6 +498,7 @@ function init() {
   $("menu-reload").addEventListener("click", () => { toggleMenu(false); reload(); });
   $("menu-export").addEventListener("click", () => { toggleMenu(false); exportCatalog(); });
   $("menu-languages").addEventListener("click", () => { toggleMenu(false); openLanguages(); });
+  $("menu-collections").addEventListener("click", () => { toggleMenu(false); openCollections(); });
   $("menu-disconnect").addEventListener("click", () => { toggleMenu(false); disconnect(); });
   $("publish-form").addEventListener("submit", publish);
   $("lang-add").addEventListener("click", addCatalogLanguage);
@@ -499,7 +509,14 @@ function init() {
   guardDialog($("publish"));
   guardDialog($("languages"));
   guardDialog($("confirm"));
-  initEditor({ onSaved: () => render(), openLanguages });
+  initEditor({
+    onSaved: (app, originalId) => {
+      if (originalId && originalId !== app.id) renameInCollections(state.catalog.collections, originalId, app.id);
+      render();
+    },
+    openLanguages,
+  });
+  initCollections({ onChange: () => render() });
 
   document.addEventListener("keydown", (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
